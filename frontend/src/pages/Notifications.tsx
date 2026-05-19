@@ -8,7 +8,8 @@ import {
   Inbox
 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
-import { notifications } from '../data/mockData';
+import { notifications, occupants } from '../data/mockData';
+import { Avatar } from '../components/common/Avatar';
 
 export default function Notifications() {
   const getTypeStyles = (type: string) => {
@@ -26,6 +27,8 @@ export default function Notifications() {
       <div className="p-4 md:p-8 max-w-7xl mx-auto w-full space-y-4">
         {notifications.map((notif) => {
           const styles = getTypeStyles(notif.type);
+          const matchedOccupant = occupants.find(o => notif.message.includes(o.name));
+          
           return (
             <div 
               key={notif.id} 
@@ -34,9 +37,15 @@ export default function Notifications() {
                 ${notif.isRead ? 'border-slate-100 opacity-75' : 'border-indigo-100 bg-indigo-50/10 ring-1 ring-indigo-50'}
               `}
             >
-              <div className={`p-3 rounded-xl shrink-0 ${styles.bg} ${styles.text}`}>
-                <styles.icon size={20} />
-              </div>
+              {matchedOccupant ? (
+                <div className="shrink-0 pt-0.5">
+                  <Avatar name={matchedOccupant.name} size="sm" />
+                </div>
+              ) : (
+                <div className={`p-3 rounded-xl shrink-0 ${styles.bg} ${styles.text}`}>
+                  <styles.icon size={20} />
+                </div>
+              )}
 
               <div className="flex-1 min-w-0 pt-0.5">
                 <div className="flex items-center justify-between gap-2 mb-1">

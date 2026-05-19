@@ -2,6 +2,8 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import DashboardLayout from './layouts/DashboardLayout';
 import { ToastProvider } from './components/Toast';
+import { ConfirmationProvider } from './components/Confirmation';
+import { SettingsProvider } from './features/settings/SettingsContext';
 
 // Lazy loading pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -27,33 +29,37 @@ function Loading() {
 
 export default function App() {
   return (
-    <ToastProvider>
-      <BrowserRouter>
-        <Suspense fallback={<Loading />}>
-          <Routes>
-            {/* Public Routes */}
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
+    <SettingsProvider>
+      <ToastProvider>
+        <ConfirmationProvider>
+          <BrowserRouter>
+            <Suspense fallback={<Loading />}>
+            <Routes>
+              {/* Public Routes */}
+              <Route path="/login" element={<Login />} />
+              <Route path="/signup" element={<Signup />} />
 
-            {/* Protected Routes Wrapper */}
-            <Route element={<DashboardLayout />}>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/rooms" element={<Rooms />} />
-              <Route path="/seats" element={<Seats />} />
-              <Route path="/attendance" element={<Attendance />} />
-              <Route path="/payments" element={<Payments />} />
-              <Route path="/occupants" element={<Occupants />} />
-              <Route path="/expenses" element={<Expenses />} />
-              <Route path="/tasks" element={<Tasks />} />
-              <Route path="/notifications" element={<Notifications />} />
-              <Route path="/settings" element={<Settings />} />
-            </Route>
+              {/* Protected Routes Wrapper */}
+              <Route element={<DashboardLayout />}>
+                <Route path="/" element={<Dashboard />} />
+                <Route path="/rooms" element={<Rooms />} />
+                <Route path="/seats" element={<Seats />} />
+                <Route path="/attendance" element={<Attendance />} />
+                <Route path="/payments" element={<Payments />} />
+                <Route path="/occupants" element={<Occupants />} />
+                <Route path="/expenses" element={<Expenses />} />
+                <Route path="/tasks" element={<Tasks />} />
+                <Route path="/notifications" element={<Notifications />} />
+                <Route path="/settings" element={<Settings />} />
+              </Route>
 
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
+              {/* Fallback */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </ConfirmationProvider>
     </ToastProvider>
+  </SettingsProvider>
   );
 }
