@@ -161,6 +161,11 @@ export interface AttendanceSession extends BaseMetadata, SoftDeletable {
   records: {
     [occupantId: string]: AttendanceRecord;
   };
+  unlockedAt?: string;
+  unlockedBy?: string;
+  presentCount?: number;
+  absentCount?: number;
+  unmarkedCount?: number;
 }
 
 export interface Payment extends BaseMetadata, SoftDeletable {
