@@ -11,10 +11,14 @@ import { EmptyState } from '../components/EmptyState';
 import { useData } from '../contexts/DataContext';
 import { useToast } from '../components/Toast';
 import { Avatar } from '../components/common/Avatar';
+import { useConfirmation } from '../components/Confirmation';
+import { useNavigate } from 'react-router-dom';
 
 export default function Notifications() {
   const { notifications, occupants, loading, markNotificationAsRead } = useData();
   const { showToast } = useToast();
+  const { confirm } = useConfirmation();
+  const navigate = useNavigate();
 
   const getTypeStyles = (type: string) => {
     switch (type) {
@@ -120,22 +124,53 @@ export default function Notifications() {
                 <p className="text-xs text-stone-500 leading-relaxed font-medium">
                   {notif.message}
                 </p>
-                {!notif.isRead && (
-                  <div className="mt-3 flex gap-2">
-                    <button 
-                      onClick={() => handleMarkAsRead(notif.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 bg-[#C8A261] hover:bg-[#B69150] text-white rounded-lg text-[10px] font-black uppercase tracking-wider shadow-md shadow-amber-900/10 transition-colors"
-                    >
-                      <Check size={12} strokeWidth={3} /> Mark Read
-                    </button>
-                    <button 
-                      onClick={() => handleMarkAsRead(notif.id)}
-                      className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors"
-                    >
-                      Dismiss
-                    </button>
-                  </div>
-                )}
+                <div className="mt-3 flex gap-2 flex-wrap">
+                  {!notif.isRead && (
+                    <>
+                      <button 
+                        onClick={() => handleMarkAsRead(notif.id)}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-[#C8A261] hover:bg-[#B69150] text-white rounded-lg text-[10px] font-black uppercase tracking-wider shadow-md shadow-amber-900/10 transition-colors cursor-pointer active:scale-95"
+                      >
+                        <Check size={12} strokeWidth={3} /> Mark Read
+                      </button>
+                      <button 
+                        onClick={() => handleMarkAsRead(notif.id)}
+                        className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-600 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer active:scale-95"
+                      >
+                        Dismiss
+                      </button>
+                    </>
+                  )}
+
+                  {/* Operational Assistance CTAs */}
+                  {notif.type === 'Payment' && matchedOccupant && (
+                    <>
+                      <button 
+                        onClick={async () => {
+                          const confirmed = await confirm({
+                            title: "Send WhatsApp Ping?",
+                            description: `This will open a direct WhatsApp reminder window with ${matchedOccupant?.name}.`,
+                            severity: "low",
+                            confirmLabel: "Send Message",
+                            cancelLabel: "Cancel"
+                          });
+                          if (confirmed) {
+                            window.open(`https://wa.me/${(matchedOccupant?.phone || '').replace(/\D/g, '')}?text=${encodeURIComponent(`Hello ${matchedOccupant?.name || ''}, this is a gentle operational follow-up regarding your payment cycle at Manushri Study Hall.`)}`, '_blank');
+                          }
+                        }}
+                        className="flex items-center gap-1 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors border border-emerald-200/50 cursor-pointer active:scale-95"
+                      >
+                        WhatsApp Alert
+                      </button>
+                      <button 
+                        onClick={() => navigate('/payments')}
+                        className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[10px] font-black uppercase tracking-wider transition-colors cursor-pointer active:scale-95"
+                      >
+                        Review Ledger
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <button className="p-1 text-stone-300 hover:text-stone-500 transition-colors">
