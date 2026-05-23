@@ -9,6 +9,7 @@ import { useToast } from '../../components/Toast';
 import { useConfirmation } from '../../components/Confirmation';
 import { useData } from '../../contexts/DataContext';
 import type { Room, RoomStatus } from './types';
+import { SkeletonCards } from '../../components/common/SkeletonLoader';
 
 export function RoomsView() {
   const { showToast } = useToast();
@@ -124,9 +125,11 @@ export function RoomsView() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#FAF8F5] space-y-4">
-        <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-amber-800/60 font-serif text-sm tracking-wide">Gathering hall layouts...</p>
+      <div className="flex flex-col min-h-screen bg-[#FAF8F5]">
+        <Header title="Study Halls" subtitle="Syncing room layouts..." />
+        <div className="p-4 md:p-8 max-w-7xl mx-auto w-full space-y-6 animate-in fade-in duration-300">
+          <SkeletonCards count={2} />
+        </div>
       </div>
     );
   }

@@ -24,6 +24,7 @@ import {
   Mail
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { SkeletonRows } from '../components/common/SkeletonLoader';
 
 export default function Payments() {
   const { showToast } = useToast();
@@ -417,13 +418,12 @@ export default function Payments() {
       <div className="flex flex-col min-h-screen bg-[#FAF8F5]">
         <Header 
           title="Payments" 
-          subtitle="Fee Tracking & Dues"
+          subtitle="Syncing fee records..."
           showBack
           action={undefined}
         />
-        <div className="flex-1 flex flex-col items-center justify-center p-8">
-          <div className="w-8 h-8 border-4 border-[#C8A261] border-t-transparent rounded-full animate-spin"></div>
-          <p className="text-[11px] font-black text-amber-900/60 mt-4 tracking-wider uppercase">Loading payments...</p>
+        <div className="p-4 md:p-8 max-w-7xl mx-auto w-full space-y-6 animate-in fade-in duration-300">
+          <SkeletonRows count={5} />
         </div>
       </div>
     );

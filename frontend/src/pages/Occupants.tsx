@@ -29,6 +29,7 @@ import {
   preventDuplicateActiveAssignments, 
   occupantService 
 } from '../services/occupantService';
+import { uploadBase64Image, validateImageUpload, getSanitizedStoragePath } from '../lib/firebase/storage';
 
 export default function Occupants() {
   const { showToast } = useToast();
@@ -82,6 +83,7 @@ export default function Occupants() {
   const [formDate, setFormDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [formPlan, setFormPlan] = useState('Full Day');
   const [formAadhaar, setFormAadhaar] = useState('');
+  const [formPhoto, setFormPhoto] = useState('');
 
   // Synchronize form room selection with available rooms
   useEffect(() => {
@@ -249,6 +251,18 @@ export default function Occupants() {
     }
 
     try {
+      let finalPhotoUrl = '';
+      if (formPhoto) {
+        try {
+          const cleanPath = getSanitizedStoragePath(hallId || "unspecified", "occupants", `profile-${Date.now()}.png`);
+          showToast("Uploading profile photo...", "info");
+          finalPhotoUrl = await uploadBase64Image(cleanPath, formPhoto);
+        } catch (err: any) {
+          console.error("Firebase Storage profile photo upload failed:", err);
+          showToast(err.message || "Failed to upload profile photo to online storage. Onboarded without photo.", "error");
+        }
+      }
+
       const newOccId = await createOccupant({
         name: formName,
         phone: formPhone,
@@ -260,7 +274,8 @@ export default function Occupants() {
         joinDate: formDate,
         planType: formPlan as any,
         monthlyFee: 2000,
-        notes: formAadhaar ? `Aadhaar: ${formAadhaar}` : ''
+        notes: formAadhaar ? `Aadhaar: ${formAadhaar}` : '',
+        photoUrl: finalPhotoUrl
       });
 
       if (availableSeat) {
@@ -276,6 +291,7 @@ export default function Occupants() {
       setFormEmergency('');
       setFormAadhaar('');
       setFormPlan('Full Day');
+      setFormPhoto('');
     } catch (err) {
       console.error(err);
       showToast('Failed to onboarding candidate. Please try again.', 'error');
@@ -444,6 +460,7 @@ export default function Occupants() {
                     phone={occ.phone}
                     attendance={occ.attendanceRate}
                     status={occ.status}
+                    photoUrl={occ.photoUrl}
                     onClick={() => setSelectedOccupant(occ)}
                     onCall={async () => {
                       const confirmed = await confirm({
@@ -478,7 +495,7 @@ export default function Occupants() {
                   className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm hover:shadow-md transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer hover:border-indigo-100"
                 >
                   <div className="flex items-center gap-4 min-w-0">
-                    <Avatar name={occ.name} size="md" />
+                    <Avatar name={occ.name} imageUrl={occ.photoUrl} size="md" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <h4 className="font-bold text-slate-900 leading-tight text-sm">{occ.name}</h4>
@@ -575,10 +592,36 @@ export default function Occupants() {
           <div className="space-y-4">
             {formName.trim() && (
               <div className="flex flex-col items-center justify-center gap-2 pb-2">
-                <Avatar name={formName} size="lg" />
+                <Avatar name={formName} imageUrl={formPhoto} size="lg" />
                 <span className="text-[9px] font-black text-indigo-600 uppercase tracking-widest">Live Avatar Preview</span>
               </div>
             )}
+
+            <div className="space-y-1.5">
+              <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Profile Photo (Optional)</label>
+              <input 
+                type="file" 
+                accept="image/png, image/jpeg, image/webp"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    const check = validateImageUpload(file, 1 * 1024 * 1024); // 1MB Profile Limit
+                    if (!check.valid) {
+                      showToast(check.error || "Profile photo exceeds 1MB limit.", "error");
+                      e.target.value = '';
+                      return;
+                    }
+                    const reader = new FileReader();
+                    reader.onloadend = () => {
+                      setFormPhoto(reader.result as string);
+                    };
+                    reader.readAsDataURL(file);
+                  }
+                }}
+                className="block w-full text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-[10px] file:font-black file:uppercase file:tracking-wider file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200 cursor-pointer"
+              />
+              <p className="text-[9px] font-bold text-slate-400 mt-1">PNG, JPG or WEBP (Max 1MB)</p>
+            </div>
 
             <div className="space-y-1.5">
               <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Full Name</label>
@@ -702,7 +745,7 @@ export default function Occupants() {
         {selectedOccupant && (
           <div className="space-y-6">
             <div className="flex flex-col items-center gap-4 text-center">
-              <Avatar name={selectedOccupant.name} size="xl" />
+              <Avatar name={selectedOccupant.name} imageUrl={selectedOccupant.photoUrl} size="xl" />
               <div>
                 <h3 className="text-2xl font-black text-slate-900 leading-none mb-2">{selectedOccupant.name}</h3>
                 <div className="flex items-center justify-center gap-2">

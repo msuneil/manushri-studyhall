@@ -144,6 +144,7 @@ export interface Occupant extends BaseMetadata, SoftDeletable {
   emergencyContact?: string;
   planType: 'Full Day' | 'Half Day' | 'Morning' | 'Evening';
   notes?: string;
+  photoUrl?: string; // Optional occupant profile image URL
 }
 
 export interface AttendanceRecord {

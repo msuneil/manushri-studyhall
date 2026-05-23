@@ -6,6 +6,8 @@ import { CancelButton } from '../../../components/common/CancelButton';
 import { isRequired } from '../../../utils/validation';
 import { Avatar } from '../../../components/common/Avatar';
 import { occupants } from '../../../data/mockData';
+import { useToast } from '../../../components/Toast';
+import { validateImageUpload } from '../../../lib/firebase/storage';
 
 interface NewOccupantSheetProps {
   isOpen: boolean;
@@ -14,6 +16,7 @@ interface NewOccupantSheetProps {
 }
 
 export function NewOccupantSheet({ isOpen, onClose, onAdd }: NewOccupantSheetProps) {
+  const { showToast } = useToast();
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -21,7 +24,8 @@ export function NewOccupantSheet({ isOpen, onClose, onAdd }: NewOccupantSheetPro
     emergencyContact: '',
     aadhaar: '',
     planType: 'Full Day',
-    monthlyFee: '2000'
+    monthlyFee: '2000',
+    profileImage: ''
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -67,7 +71,7 @@ export function NewOccupantSheet({ isOpen, onClose, onAdd }: NewOccupantSheetPro
       planType: formData.planType as any,
       notes: 'Newly onboarded occupant.',
       aadhaarPlaceholder: `XXXX-XXXX-${formData.aadhaar.slice(-4) || '9999'}`,
-      profileImage: '',
+      profileImage: formData.profileImage,
       paymentStatus: 'Pending' as const,
       lastPaymentDate: 'None',
       lastAttendanceDate: 'None',
@@ -99,10 +103,31 @@ export function NewOccupantSheet({ isOpen, onClose, onAdd }: NewOccupantSheetPro
       <div className="space-y-6 pb-6">
         {/* Live Initials Avatar & Deterministic Color Preview */}
         <div className="flex flex-col items-center gap-3 p-5 bg-slate-50 border border-slate-200/60 rounded-3xl text-center">
-          <Avatar name={formData.name || 'New Occupant'} size="xl" />
-          <div>
-            <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Auto-Generated Identity Avatar</h4>
-            <p className="text-[10px] text-slate-400 font-bold mt-1">Deterministic color & initials generated instantly</p>
+          <Avatar name={formData.name || 'New Occupant'} imageUrl={formData.profileImage} size="xl" />
+          <div className="w-full">
+            <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest mb-2">Member Photograph (Optional)</h4>
+            <input 
+              type="file" 
+              accept="image/png, image/jpeg, image/webp"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  const check = validateImageUpload(file, 1 * 1024 * 1024); // 1MB Profile Photo Limit
+                  if (!check.valid) {
+                    showToast(check.error || "Profile image exceeds 1MB limit.", "error");
+                    e.target.value = '';
+                    return;
+                  }
+                  const reader = new FileReader();
+                  reader.onloadend = () => {
+                    setFormData(prev => ({ ...prev, profileImage: reader.result as string }));
+                  };
+                  reader.readAsDataURL(file);
+                }
+              }}
+              className="block w-full text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-[10px] file:font-black file:uppercase file:tracking-wider file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer"
+            />
+            <p className="text-[9px] font-bold text-slate-400 mt-1">PNG, JPG or WEBP (Max 1MB)</p>
           </div>
         </div>
 
