@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Header } from '../../components/Header';
 import { Plus, LayoutGrid } from 'lucide-react';
 import { RoomCard } from './components/RoomCard';
@@ -6,19 +6,70 @@ import { AddRoomSheet } from './sheets/AddRoomSheet';
 import { RoomDetailsSheet } from './sheets/RoomDetailsSheet';
 import { EmptyState } from '../../components/common/EmptyState';
 import { useToast } from '../../components/Toast';
-import { mockRooms } from './mock/roomsData';
-import type { Room, RoomStatus } from './types';
 import { useConfirmation } from '../../components/Confirmation';
+import { useData } from '../../contexts/DataContext';
+import type { Room, RoomStatus } from './types';
 
 export function RoomsView() {
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
-  const [rooms, setRooms] = useState<Room[]>(mockRooms);
+  
+  // Connect to live repository subscriptions orchestrator
+  const { rooms: dbRooms, seats, occupants, payments, updateRoom, loading } = useData();
+
+  // Enriched rooms computed reactively from related collection states
+  const rooms = useMemo(() => {
+    return dbRooms.map(room => {
+      const roomSeats = seats.filter(s => s.roomId === room.id);
+      const totalSeats = roomSeats.length;
+      const occupiedSeats = roomSeats.filter(s => s.isOccupied).length;
+
+      const isAC = room.type.toLowerCase().includes('ac') && !room.type.toLowerCase().includes('non-ac');
+      const pricingPreview = isAC ? '₹2000/month' : '₹1500/month';
+      const rulesPreview = isAC ? ['Silent Zone', 'Laptop Only'] : ['Discussion Allowed'];
+
+      const roomOccupants = occupants.filter(o => {
+        const seat = seats.find(s => s.id === o.seatId);
+        return seat && seat.roomId === room.id;
+      });
+      const roomOccupantIds = roomOccupants.map(o => o.id);
+      
+      const roomPayments = payments.filter(p => roomOccupantIds.includes(p.occupantId) && p.month === 'May 2026');
+      const revenueCollected = roomPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + p.amount, 0);
+      const revenueExpected = roomPayments.reduce((sum, p) => sum + p.amount, 0);
+
+      const status = (room as any).status || 'Active';
+      const seatPrefix = (room as any).seatPrefix || (isAC ? 'AC' : 'NAC');
+      const genderRestriction = (room as any).genderRestriction || 'Mixed';
+      const notes = (room as any).notes || '';
+      
+      return {
+        id: room.id,
+        name: room.name,
+        type: room.type,
+        status,
+        pricingPreview,
+        rulesPreview,
+        revenueCollected,
+        revenueExpected: revenueExpected || (totalSeats * (isAC ? 2000 : 1500)),
+        totalSeats,
+        occupiedSeats,
+        seatPrefix,
+        genderRestriction,
+        notes
+      } as Room;
+    });
+  }, [dbRooms, seats, occupants, payments]);
   
   // Sheet states
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [activeRoomDetails, setActiveRoomDetails] = useState<Room | null>(null);
   const [activeRoomEdit, setActiveRoomEdit] = useState<Room | null>(null);
+
+  const activeRoomDetailsEnriched = useMemo(() => {
+    if (!activeRoomDetails) return null;
+    return rooms.find(r => r.id === activeRoomDetails.id) || null;
+  }, [activeRoomDetails, rooms]);
 
   const handleSaveRoom = () => {
     showToast('Room saved successfully', 'success');
@@ -54,20 +105,31 @@ export function RoomsView() {
     }
   };
 
-  const executeStatusTransition = (roomId: string, newStatus: RoomStatus) => {
-    setRooms(prev => prev.map(r => r.id === roomId ? { ...r, status: newStatus } : r));
-    
-    // Update active details overlay if it is currently viewing the modified room
-    setActiveRoomDetails(prev => prev && prev.id === roomId ? { ...prev, status: newStatus } : prev);
-
-    if (newStatus === 'Active') {
-      showToast('Room is now Active and open for assignments', 'success');
-    } else if (newStatus === 'Maintenance') {
-      showToast('Room marked in Maintenance. New assignments blocked.', 'info');
-    } else if (newStatus === 'Inactive') {
-      showToast('Room Deactivated successfully', 'success');
+  const executeStatusTransition = async (roomId: string, newStatus: RoomStatus) => {
+    try {
+      await updateRoom(roomId, { status: newStatus } as any);
+      
+      if (newStatus === 'Active') {
+        showToast('Room is now Active and open for assignments', 'success');
+      } else if (newStatus === 'Maintenance') {
+        showToast('Room marked in Maintenance. New assignments blocked.', 'info');
+      } else if (newStatus === 'Inactive') {
+        showToast('Room Deactivated successfully', 'success');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to update room status.', 'error');
     }
   };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#FAF8F5] space-y-4">
+        <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-amber-800/60 font-serif text-sm tracking-wide">Gathering hall layouts...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">
@@ -76,7 +138,7 @@ export function RoomsView() {
         subtitle="Manage Room Types"
         action={
           <button 
-            onClick={() => setIsAddOpen(true)}
+            onClick={() => { setActiveRoomEdit(null); setIsAddOpen(true); }}
             className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-500/20 active:scale-95 transition-transform focus-visible:ring-2 focus-visible:ring-indigo-500 outline-none"
             aria-label="Add Room"
           >
@@ -93,7 +155,7 @@ export function RoomsView() {
             description="Create your first study hall room to start managing seat allocations."
             action={
               <button 
-                onClick={() => setIsAddOpen(true)}
+                onClick={() => { setActiveRoomEdit(null); setIsAddOpen(true); }}
                 className="w-full py-4 bg-indigo-600 text-white rounded-[1.25rem] text-sm font-black uppercase tracking-wider shadow-xl shadow-indigo-500/30 active:scale-[0.98] transition-all mt-4"
               >
                 Create Room
@@ -117,13 +179,14 @@ export function RoomsView() {
 
       <AddRoomSheet 
         isOpen={isAddOpen} 
-        onClose={() => setIsAddOpen(false)}
+        onClose={() => { setIsAddOpen(false); setActiveRoomEdit(null); }}
         onSave={handleSaveRoom}
+        room={activeRoomEdit}
       />
 
       <RoomDetailsSheet 
-        isOpen={!!activeRoomDetails}
-        room={activeRoomDetails}
+        isOpen={!!activeRoomDetailsEnriched}
+        room={activeRoomDetailsEnriched}
         onClose={() => setActiveRoomDetails(null)}
         onEdit={(r) => {
           setActiveRoomDetails(null);
@@ -132,7 +195,6 @@ export function RoomsView() {
         }}
         onStatusTransition={handleStatusTransition}
       />
-      {activeRoomEdit && <div className="hidden" aria-hidden="true">{activeRoomEdit.id}</div>}
     </div>
   );
 }

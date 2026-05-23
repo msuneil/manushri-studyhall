@@ -7,14 +7,18 @@ import { CancelButton } from '../../../components/common/CancelButton';
 import { useUnsavedChanges } from '../../../hooks/useUnsavedChanges';
 import { ConfirmationDialog } from '../../../components/common/ConfirmationDialog';
 import { isRequired } from '../../../utils/validation';
+import { useData } from '../../../contexts/DataContext';
 
 interface AddRoomSheetProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: () => void;
+  room?: any;
 }
 
-export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
+export function AddRoomSheet({ isOpen, onClose, onSave, room }: AddRoomSheetProps) {
+  const { createRoom, updateRoom, batchCreateSeats } = useData();
+
   const [formData, setFormData] = useState({
     name: '',
     type: 'AC Hall',
@@ -39,20 +43,35 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
       markClean();
       setErrors({});
       setIsSuccess(false);
-      setFormData({
-        name: '',
-        type: 'AC Hall',
-        totalSeats: '',
-        seatPrefix: '',
-        genderRestriction: 'Mixed',
-        pricing: '',
-        pricingType: 'Monthly',
-        rules: '',
-        status: 'Active',
-        notes: ''
-      });
+      if (room) {
+        setFormData({
+          name: room.name,
+          type: room.type,
+          totalSeats: String(room.totalSeats),
+          seatPrefix: room.seatPrefix,
+          genderRestriction: room.genderRestriction,
+          pricing: room.pricingPreview ? room.pricingPreview.replace(/[^0-9]/g, '') : '2000',
+          pricingType: 'Monthly',
+          rules: room.rulesPreview ? room.rulesPreview.join(', ') : '',
+          status: room.status,
+          notes: room.notes || ''
+        });
+      } else {
+        setFormData({
+          name: '',
+          type: 'AC Hall',
+          totalSeats: '',
+          seatPrefix: '',
+          genderRestriction: 'Mixed',
+          pricing: '',
+          pricingType: 'Monthly',
+          rules: '',
+          status: 'Active',
+          notes: ''
+        });
+      }
     }
-  }, [isOpen, markClean]);
+  }, [isOpen, room, markClean]);
 
   const handleChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -65,8 +84,10 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!isRequired(formData.name)) newErrors.name = 'Room name is required';
-    if (!isRequired(formData.totalSeats)) newErrors.totalSeats = 'Total seats required';
-    if (!isRequired(formData.seatPrefix)) newErrors.seatPrefix = 'Seat prefix required';
+    if (!room) {
+      if (!isRequired(formData.totalSeats)) newErrors.totalSeats = 'Total seats required';
+      if (!isRequired(formData.seatPrefix)) newErrors.seatPrefix = 'Seat prefix required';
+    }
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -75,11 +96,43 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
   const handleSave = async () => {
     if (!validate()) return;
     setIsSaving(true);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setIsSaving(false);
-    setIsSuccess(true);
-    markClean();
-    setTimeout(() => onSave(), 1000);
+    try {
+      if (room) {
+        // Edit mode
+        await updateRoom(room.id, {
+          name: formData.name,
+          type: formData.type as any,
+          status: formData.status,
+          genderRestriction: formData.genderRestriction,
+          notes: formData.notes
+        } as any);
+      } else {
+        // Create mode
+        const newRoomId = await createRoom(formData.name, formData.type as any);
+        
+        // Also save extra custom fields on the document
+        await updateRoom(newRoomId, {
+          status: formData.status,
+          seatPrefix: formData.seatPrefix,
+          genderRestriction: formData.genderRestriction,
+          notes: formData.notes
+        } as any);
+
+        // Batch create seats!
+        const count = parseInt(formData.totalSeats, 10);
+        if (count > 0) {
+          await batchCreateSeats(newRoomId, count, formData.seatPrefix);
+        }
+      }
+      setIsSuccess(true);
+      markClean();
+      setTimeout(() => onSave(), 1000);
+    } catch (e) {
+      console.error(e);
+      setErrors({ name: 'Failed to save room to database' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -87,12 +140,12 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
       <BottomSheet 
         isOpen={isOpen} 
         onClose={() => handleCloseAttempt(onClose)} 
-        title="Add New Room"
+        title={room ? "Edit Room" : "Add New Room"}
         size="scroll"
         footer={
           <StickyActionFooter>
             <CancelButton onClick={() => handleCloseAttempt(onClose)} />
-            <SaveButton onClick={handleSave} isSaving={isSaving} isSuccess={isSuccess} label="Create Room" />
+            <SaveButton onClick={handleSave} isSaving={isSaving} isSuccess={isSuccess} label={room ? "Save Changes" : "Create Room"} />
           </StickyActionFooter>
         }
       >
@@ -116,8 +169,6 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
               >
                 <option value="AC Hall">AC Hall</option>
                 <option value="Non-AC Hall">Non-AC Hall</option>
-                <option value="Premium">Premium</option>
-                <option value="Silent Zone">Silent Zone</option>
               </FormSelect>
               <FormSelect 
                 label="Gender Restriction" 
@@ -132,30 +183,32 @@ export function AddRoomSheet({ isOpen, onClose, onSave }: AddRoomSheetProps) {
           </FormRow>
         </FormSection>
 
-        <FormSection title="Capacity & Naming">
-          <FormRow>
-            <div className="grid grid-cols-2 gap-4">
-              <FormInput 
-                label="Total Seats" 
-                type="number"
-                value={formData.totalSeats}
-                onChange={(e) => handleChange('totalSeats', e.target.value)}
-                placeholder="e.g. 50"
-                error={errors.totalSeats}
-                required
-              />
-              <FormInput 
-                label="Seat Prefix" 
-                value={formData.seatPrefix}
-                onChange={(e) => handleChange('seatPrefix', e.target.value)}
-                placeholder="e.g. AC, NAC, PRM"
-                error={errors.seatPrefix}
-                required
-                helper="Used for future seat generation."
-              />
-            </div>
-          </FormRow>
-        </FormSection>
+        {!room && (
+          <FormSection title="Capacity & Naming">
+            <FormRow>
+              <div className="grid grid-cols-2 gap-4">
+                <FormInput 
+                  label="Total Seats" 
+                  type="number"
+                  value={formData.totalSeats}
+                  onChange={(e) => handleChange('totalSeats', e.target.value)}
+                  placeholder="e.g. 50"
+                  error={errors.totalSeats}
+                  required
+                />
+                <FormInput 
+                  label="Seat Prefix" 
+                  value={formData.seatPrefix}
+                  onChange={(e) => handleChange('seatPrefix', e.target.value)}
+                  placeholder="e.g. AC, NAC, PRM"
+                  error={errors.seatPrefix}
+                  required
+                  helper="Used for future seat generation."
+                />
+              </div>
+            </FormRow>
+          </FormSection>
+        )}
 
         <FormSection title="Pricing & Rules">
           <FormRow>

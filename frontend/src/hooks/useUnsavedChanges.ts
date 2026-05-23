@@ -1,9 +1,11 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback } from "react";
 
 export function useUnsavedChanges(initialIsDirty = false) {
   const [isDirty, setIsDirty] = useState(initialIsDirty);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [pendingCloseAction, setPendingCloseAction] = useState<(() => void) | null>(null);
+  const [pendingCloseAction, setPendingCloseAction] = useState<
+    (() => void) | null
+  >(null);
 
   const markDirty = useCallback(() => setIsDirty(true), []);
   const markClean = useCallback(() => setIsDirty(false), []);
@@ -17,7 +19,7 @@ export function useUnsavedChanges(initialIsDirty = false) {
         onClose();
       }
     },
-    [isDirty]
+    [isDirty],
   );
 
   const confirmDiscard = useCallback(() => {

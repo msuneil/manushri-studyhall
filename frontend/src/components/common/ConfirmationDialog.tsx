@@ -1,5 +1,5 @@
-import { AlertTriangle } from 'lucide-react';
-import { useEffect } from 'react';
+import { AlertTriangle } from "lucide-react";
+import { useEffect } from "react";
 
 interface ConfirmationDialogProps {
   isOpen: boolean;
@@ -21,7 +21,7 @@ export function ConfirmationDialog({
   onCancel,
 }: ConfirmationDialogProps) {
   useEffect(() => {
-    // If the dialog opens over an already open bottom sheet, 
+    // If the dialog opens over an already open bottom sheet,
     // we want to ensure we don't accidentally enable body scroll.
     // The bottom sheet already handles body overflow hidden.
   }, [isOpen]);
@@ -29,13 +29,13 @@ export function ConfirmationDialog({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[150] flex items-center justify-center px-6">
+    <div className="fixed inset-0 z-150 flex items-center justify-center px-6">
       {/* Backdrop */}
-      <div 
+      <div
         className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200"
         onClick={onCancel}
       />
-      
+
       {/* Dialog Card */}
       <div className="relative w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl animate-in zoom-in-95 duration-200">
         <div className="flex flex-col items-center text-center gap-4">
@@ -48,7 +48,7 @@ export function ConfirmationDialog({
               {description}
             </p>
           </div>
-          
+
           <div className="w-full flex flex-col gap-3 mt-2">
             <button
               onClick={onConfirm}

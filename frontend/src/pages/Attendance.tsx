@@ -16,16 +16,9 @@ import {
   AlertTriangle,
   Sparkles
 } from 'lucide-react';
-import { occupants, seats } from '../data/mockData';
+import { useData } from '../contexts/DataContext';
 import { Avatar } from '../components/common/Avatar';
 import { BottomSheet } from '../components/common/BottomSheet';
-
-interface AttendanceSession {
-  status: 'draft' | 'submitted' | 'edited';
-  submittedAt?: string;
-  editedAt?: string;
-  records: Record<string, 'present' | 'absent'>;
-}
 
 export default function Attendance() {
   const { showToast } = useToast();
@@ -36,54 +29,54 @@ export default function Attendance() {
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
   const [isBulkSheetOpen, setIsBulkSheetOpen] = useState(false);
 
-  // Prepopulate historical sessions dynamically so calendar traversal works instantly
-  const [sessions, setSessions] = useState<Record<string, AttendanceSession>>(() => {
-    const yesterdayRecords: Record<string, 'present' | 'absent'> = {};
-    occupants.forEach((occ, idx) => {
-      if (idx % 7 === 0) {
-        yesterdayRecords[occ.id] = 'absent';
-      } else if (idx % 7 !== 6) {
-        yesterdayRecords[occ.id] = 'present';
-      }
-    });
+  const { occupants, seats, attendanceSessions, saveAttendanceSession, loading } = useData();
 
-    const twoDaysAgoRecords: Record<string, 'present' | 'absent'> = {};
-    occupants.forEach((occ, idx) => {
-      if (idx % 8 === 0) {
-        twoDaysAgoRecords[occ.id] = 'absent';
-      } else if (idx % 8 !== 7) {
-        twoDaysAgoRecords[occ.id] = 'present';
-      }
-    });
-
-    const yStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-    const tdaStr = new Date(Date.now() - 172800000).toISOString().split('T')[0];
-
-    return {
-      [yStr]: {
-        status: 'submitted',
-        submittedAt: 'Yesterday, 09:12 AM',
-        records: yesterdayRecords
-      },
-      [tdaStr]: {
-        status: 'submitted',
-        submittedAt: '2 days ago, 09:05 AM',
-        records: twoDaysAgoRecords
-      }
-    };
-  });
+  // Filter active occupants only
+  const activeOccupants = useMemo(() => {
+    return occupants.filter(o => o.isActive && o.status === 'Active');
+  }, [occupants]);
 
   // Load selected date session or fallback to draft
-  const activeSession = useMemo((): AttendanceSession => {
-    return sessions[selectedDate] || {
-      status: 'draft',
-      records: {}
+  const activeSession = useMemo(() => {
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    
+    // Map Firestore AttendanceSession['records'] to Record<string, 'present' | 'absent'>
+    const mappedRecords: Record<string, 'present' | 'absent'> = {};
+    if (session?.records) {
+      Object.entries(session.records).forEach(([occId, rec]) => {
+        if (rec.status === 'Present') {
+          mappedRecords[occId] = 'present';
+        } else if (rec.status === 'Absent') {
+          mappedRecords[occId] = 'absent';
+        }
+      });
+    }
+
+    // Derive status
+    let status: 'draft' | 'submitted' | 'edited' = 'draft';
+    if (session) {
+      status = session.isSubmitted ? 'submitted' : 'edited';
+    }
+
+    const submittedAt = session?.isSubmitted && session?.updatedAt
+      ? `Today, ${new Date(session.updatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+      : undefined;
+
+    const editedAt = !session?.isSubmitted && session?.updatedAt
+      ? `Today, ${new Date(session.updatedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+      : undefined;
+
+    return {
+      status,
+      submittedAt,
+      editedAt,
+      records: mappedRecords
     };
-  }, [sessions, selectedDate]);
+  }, [attendanceSessions, selectedDate]);
 
   // Enriched search results
   const enrichedOccupants = useMemo(() => {
-    return occupants.map(occ => {
+    return activeOccupants.map(occ => {
       const seat = seats.find(s => s.id === occ.seatId);
       return {
         ...occ,
@@ -93,7 +86,7 @@ export default function Attendance() {
       occ.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
       occ.seatNumber.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery]);
+  }, [activeOccupants, seats, searchQuery]);
 
   // Recalculated states explicitly separating Unmarked
   const stats = useMemo(() => {
@@ -112,38 +105,35 @@ export default function Attendance() {
   }, [activeSession, enrichedOccupants]);
 
   // Rapid operational attendance marking (Present -> Unmarked, Absent -> Present)
-  const handleMarkAttendance = (id: string, state: 'present' | 'absent') => {
+  const handleMarkAttendance = async (id: string, state: 'present' | 'absent') => {
     if (activeSession.status === 'submitted') {
       showToast("Attendance is locked. Tap 'Unlock Session' to modify.", "info");
       return;
     }
 
-    setSessions(prev => {
-      const current = prev[selectedDate] || { status: 'draft', records: {} };
-      const currentVal = current.records[id];
-      
-      const newRecords = { ...current.records };
-      if (currentVal === state) {
-        delete newRecords[id]; // quick undo
-      } else {
-        newRecords[id] = state;
-      }
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    const currentRecords = session?.records || {};
+    const updatedRecords = { ...currentRecords };
 
-      const updatedSession: AttendanceSession = {
-        ...current,
-        records: newRecords
+    const currentVal = activeSession.records[id];
+    
+    if (currentVal === state) {
+      delete updatedRecords[id];
+    } else {
+      updatedRecords[id] = {
+        occupantId: id,
+        status: state === 'present' ? 'Present' : 'Absent',
+        markedAt: new Date().toISOString(),
+        markedBy: 'operator'
       };
+    }
 
-      // If already in edited status, preserve it
-      if (current.status === 'submitted') {
-        updatedSession.status = 'edited';
-      }
-
-      return {
-        ...prev,
-        [selectedDate]: updatedSession
-      };
-    });
+    try {
+      await saveAttendanceSession(selectedDate, false, updatedRecords);
+    } catch (error) {
+      console.error(error);
+      showToast("Failed to save attendance record", "error");
+    }
   };
 
   // Day Traversal callbacks
@@ -185,23 +175,26 @@ export default function Attendance() {
 
     if (!confirmed) return;
 
-    setSessions(prev => {
-      const current = prev[selectedDate] || { status: 'draft', records: {} };
-      const newRecords = { ...current.records };
-      enrichedOccupants.forEach(occ => {
-        newRecords[occ.id] = type;
-      });
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    const currentRecords = session?.records || {};
+    const updatedRecords = { ...currentRecords };
 
-      return {
-        ...prev,
-        [selectedDate]: {
-          ...current,
-          records: newRecords
-        }
+    enrichedOccupants.forEach(occ => {
+      updatedRecords[occ.id] = {
+        occupantId: occ.id,
+        status: type === 'present' ? 'Present' : 'Absent',
+        markedAt: new Date().toISOString(),
+        markedBy: 'operator'
       };
     });
 
-    showToast(`All filtered occupants marked as ${type}.`, "success");
+    try {
+      await saveAttendanceSession(selectedDate, false, updatedRecords);
+      showToast(`All filtered occupants marked as ${type}.`, "success");
+    } catch (error) {
+      console.error(error);
+      showToast("Failed to perform bulk mark action", "error");
+    }
   };
 
   const handleBulkReset = async () => {
@@ -222,18 +215,13 @@ export default function Attendance() {
 
     if (!confirmed) return;
 
-    setSessions(prev => {
-      const current = prev[selectedDate] || { status: 'draft', records: {} };
-      return {
-        ...prev,
-        [selectedDate]: {
-          ...current,
-          records: {}
-        }
-      };
-    });
-
-    showToast("Active attendance session cleared.", "info");
+    try {
+      await saveAttendanceSession(selectedDate, false, {});
+      showToast("Active attendance session cleared.", "info");
+    } catch (error) {
+      console.error(error);
+      showToast("Failed to reset session", "error");
+    }
   };
 
   // Submission workflows
@@ -250,37 +238,29 @@ export default function Attendance() {
 
     if (!confirmed) return;
 
-    const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-    setSessions(prev => {
-      const current = prev[selectedDate] || { status: 'draft', records: {} };
-      return {
-        ...prev,
-        [selectedDate]: {
-          ...current,
-          status: 'submitted',
-          submittedAt: `Today, ${nowStr}`
-        }
-      };
-    });
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    const records = session?.records || {};
 
-    showToast("Daily attendance submitted and locked.", "success");
+    try {
+      await saveAttendanceSession(selectedDate, true, records);
+      showToast("Daily attendance submitted and locked.", "success");
+    } catch (error) {
+      console.error(error);
+      showToast("Failed to lock session", "error");
+    }
   };
 
-  const handleUnlockSession = () => {
-    setSessions(prev => {
-      const current = prev[selectedDate] || { status: 'submitted', records: {} };
-      const nowStr = new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-      return {
-        ...prev,
-        [selectedDate]: {
-          ...current,
-          status: 'edited',
-          editedAt: `Today, ${nowStr}`
-        }
-      };
-    });
+  const handleUnlockSession = async () => {
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    const records = session?.records || {};
 
-    showToast("Session unlocked. Re-submit to re-lock.", "info");
+    try {
+      await saveAttendanceSession(selectedDate, false, records);
+      showToast("Session unlocked. Re-submit to re-lock.", "info");
+    } catch (error) {
+      console.error(error);
+      showToast("Failed to unlock session", "error");
+    }
   };
 
   // Combined filters (Search Query + Present/Absent/Unmarked filters)
@@ -294,6 +274,23 @@ export default function Attendance() {
       return true;
     });
   }, [enrichedOccupants, activeSession, filterStatus]);
+
+  if (loading) {
+    return (
+      <div className="flex flex-col min-h-screen bg-[#FAF8F5]">
+        <Header 
+          title="Attendance" 
+          subtitle="Daily Presence Tracking"
+          showBack
+          action={undefined}
+        />
+        <div className="flex-1 flex flex-col items-center justify-center p-8">
+          <div className="w-8 h-8 border-4 border-[#C8A261] border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-[11px] font-black text-amber-900/60 mt-4 tracking-wider uppercase">Loading attendance...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">
@@ -388,15 +385,15 @@ export default function Attendance() {
               <p className="text-lg font-black text-white mt-0.5">{stats.total}</p>
             </div>
             <div className="text-center border-r border-white/5">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider text-emerald-400">Present</p>
+              <p className="text-[9px] font-black text-emerald-400 uppercase tracking-wider">Present</p>
               <p className="text-lg font-black text-white mt-0.5">{stats.present}</p>
             </div>
             <div className="text-center border-r border-white/5">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider text-rose-400">Absent</p>
+              <p className="text-[9px] font-black text-rose-400 uppercase tracking-wider">Absent</p>
               <p className="text-lg font-black text-white mt-0.5">{stats.absent}</p>
             </div>
             <div className="text-center">
-              <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider text-slate-400">Unmarked</p>
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-wider">Unmarked</p>
               <p className="text-lg font-black text-white mt-0.5">{stats.unmarked}</p>
             </div>
           </div>

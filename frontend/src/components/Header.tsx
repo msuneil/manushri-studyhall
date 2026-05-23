@@ -5,10 +5,10 @@ import { Avatar } from './common/Avatar';
 import { notifications } from '../data/mockData';
 import { useSettings } from '../features/settings/SettingsContext';
 import { BottomSheet } from './common/BottomSheet';
-import { useToast } from './Toast';
 import { OwnerProfileSheet } from '../features/settings/sheets/OwnerProfileSheet';
 import { HallDetailsSheet } from '../features/settings/sheets/HallDetailsSheet';
 import { AdminAccessSheet } from '../features/settings/sheets/AdminAccessSheet';
+import { useAuth } from '../features/auth/AuthContext';
 
 interface HeaderProps {
   title: string;
@@ -20,7 +20,7 @@ interface HeaderProps {
 export function Header({ title, subtitle, action, showBack }: HeaderProps) {
   const navigate = useNavigate();
   const { settings } = useSettings();
-  const { showToast } = useToast();
+  const { logout } = useAuth();
   const hasUnread = notifications.some(n => !n.isRead);
 
   // Bottom sheets triggers
@@ -29,10 +29,14 @@ export function Header({ title, subtitle, action, showBack }: HeaderProps) {
   const [isHallOpen, setIsHallOpen] = useState(false);
   const [isAdminOpen, setIsAdminOpen] = useState(false);
 
-  const handleLogout = () => {
-    setIsAccountSheetOpen(false);
-    showToast('Signed out successfully!', 'success');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      setIsAccountSheetOpen(false);
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   return (

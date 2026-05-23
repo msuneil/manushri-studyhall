@@ -1,4 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../../lib/firebase/firestore';
+import { useAuth } from '../auth/AuthContext';
+import { useToast } from '../../components/Toast';
 
 export interface HallDetails {
   name: string;
@@ -46,7 +50,7 @@ export interface AppSettings {
   roomDefaults: RoomDefaultSettings;
 }
 
-const defaultSettings: AppSettings = {
+export const defaultSettings: AppSettings = {
   hallDetails: {
     name: 'Manushri Study Hall',
     logo: '',
@@ -92,18 +96,19 @@ const defaultSettings: AppSettings = {
 
 interface SettingsContextType {
   settings: AppSettings;
-  updateSettings: <K extends keyof AppSettings>(section: K, values: Partial<AppSettings[K]>) => void;
-  resetToDefaults: () => void;
+  updateSettings: <K extends keyof AppSettings>(section: K, values: Partial<AppSettings[K]>) => Promise<void>;
+  resetToDefaults: () => Promise<void>;
 }
 
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
 export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { hallId } = useAuth();
+  const { showToast } = useToast();
   const [settings, setSettings] = useState<AppSettings>(() => {
     const saved = localStorage.getItem('manushri_studyhall_settings');
     if (saved) {
       try {
-        // Deep merge saved settings with default settings to handle dynamic schema additions safely
         const parsed = JSON.parse(saved);
         return {
           hallDetails: { ...defaultSettings.hallDetails, ...parsed.hallDetails },
@@ -119,11 +124,45 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return defaultSettings;
   });
 
+  // Listen to live database changes in settings scoped by hallId
+  useEffect(() => {
+    if (!hallId) {
+      setSettings(defaultSettings);
+      return;
+    }
+
+    const docRef = doc(db, 'settings', hallId);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as Partial<AppSettings>;
+        setSettings({
+          hallDetails: { ...defaultSettings.hallDetails, ...data.hallDetails },
+          ownerDetails: { ...defaultSettings.ownerDetails, ...data.ownerDetails },
+          paymentSettings: { ...defaultSettings.paymentSettings, ...data.paymentSettings },
+          attendanceSettings: { ...defaultSettings.attendanceSettings, ...data.attendanceSettings },
+          roomDefaults: { ...defaultSettings.roomDefaults, ...data.roomDefaults }
+        });
+      } else {
+        // Initialize defaults in firestore if not exists
+        setDoc(docRef, { ...defaultSettings, hallId });
+      }
+    }, (error) => {
+      console.error('Settings listening error:', error);
+    });
+
+    return () => unsubscribe();
+  }, [hallId]);
+
+  // Sync to localStorage as backup
   useEffect(() => {
     localStorage.setItem('manushri_studyhall_settings', JSON.stringify(settings));
   }, [settings]);
 
-  const updateSettings = <K extends keyof AppSettings>(section: K, values: Partial<AppSettings[K]>) => {
+  const updateSettings = async <K extends keyof AppSettings>(
+    section: K,
+    values: Partial<AppSettings[K]>
+  ) => {
+    // 1. Optimistic UI update locally
     setSettings(prev => ({
       ...prev,
       [section]: {
@@ -131,10 +170,36 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         ...values
       }
     }));
+
+    // 2. Persist to Firestore if user is authenticated
+    if (hallId) {
+      try {
+        const docRef = doc(db, 'settings', hallId);
+        await updateDoc(docRef, {
+          [`${section}`]: {
+            ...settings[section],
+            ...values
+          }
+        });
+      } catch (error) {
+        console.error('Firestore settings update error:', error);
+        showToast('Error syncing settings online.', 'error');
+      }
+    }
   };
 
-  const resetToDefaults = () => {
+  const resetToDefaults = async () => {
     setSettings(defaultSettings);
+    if (hallId) {
+      try {
+        const docRef = doc(db, 'settings', hallId);
+        await setDoc(docRef, { ...defaultSettings, hallId });
+        showToast('Settings reset to defaults successfully.', 'success');
+      } catch (error) {
+        console.error('Settings reset error:', error);
+        showToast('Error resetting settings online.', 'error');
+      }
+    }
   };
 
   return (
