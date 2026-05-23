@@ -8,15 +8,36 @@ import {
   Calendar, 
   AlertCircle,
   Trash2,
-  ClipboardList
+  ClipboardList,
+  MessageCircle,
+  Clock,
+  ArrowRight,
+  IndianRupee
 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { useData } from '../contexts/DataContext';
 import { useToast } from '../components/Toast';
+import { useSettings } from '../features/settings/SettingsContext';
+import { useConfirmation } from '../components/Confirmation';
+import { useNavigate } from 'react-router-dom';
+import { Avatar } from '../components/common/Avatar';
+import { taskService } from '../services/taskService';
 
 export default function Tasks() {
-  const { tasks, loading, createTask, updateTask, softDeleteTask } = useData();
+  const { 
+    tasks, 
+    loading, 
+    createTask, 
+    updateTask, 
+    softDeleteTask,
+    occupants,
+    payments,
+    attendanceSessions
+  } = useData();
   const { showToast } = useToast();
+  const { confirm } = useConfirmation();
+  const { settings } = useSettings();
+  const navigate = useNavigate();
 
   const [showAdd, setShowAdd] = useState(false);
   const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
@@ -26,11 +47,117 @@ export default function Tasks() {
   const [formPriority, setFormPriority] = useState<'Low' | 'Medium' | 'High'>('Medium');
   const [formDueDate, setFormDueDate] = useState(() => new Date().toISOString().split('T')[0]);
 
+  // Compile, deduplicate, aggregate, and order Operational System Priorities
+  const systemPriorities = useMemo(() => {
+    const alertsList: any[] = [];
+
+    // 1. Daily Attendance Alert
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todaysSession = (attendanceSessions ?? []).find(s => s.date === todayStr);
+    const isSubmitted = todaysSession ? todaysSession.isSubmitted : false;
+
+    if (!isSubmitted) {
+      const markedCount = todaysSession ? Object.keys(todaysSession.records).length : 0;
+      const activeOccupantsCount = occupants.filter(o => o.isActive && o.status === 'Active' && o.seatId && o.seatId !== 'N/A').length;
+      const unmarkedCount = Math.max(0, activeOccupantsCount - markedCount);
+
+      alertsList.push({
+        id: 'attendance-pending',
+        type: 'attendance',
+        priorityValue: 1,
+        title: "Daily attendance still pending today",
+        description: todaysSession 
+          ? `Daily attendance is in draft. ${unmarkedCount} unmarked occupants remaining.`
+          : `Daily attendance for today has not been started yet.`,
+        actionLabel: "Complete Attendance",
+        actionPath: "/attendance"
+      });
+    }
+
+    // 2. Overdue Fee Alerts
+    const gracePeriod = settings?.paymentSettings?.gracePeriodDays ?? 3;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const rawOverduePayments = (payments ?? [])
+      .filter(p => {
+        if (!p.isActive || p.status === 'Paid') return false;
+        if (p.status === 'Overdue') return true;
+
+        const dueDate = new Date(p.dueDate);
+        if (isNaN(dueDate.getTime())) return false;
+        
+        const overdueThreshold = new Date(dueDate);
+        overdueThreshold.setDate(overdueThreshold.getDate() + gracePeriod);
+        overdueThreshold.setHours(0, 0, 0, 0);
+
+        return today > overdueThreshold;
+      })
+      .map(p => {
+        const occupant = (occupants ?? []).find(o => o.id === p.occupantId);
+        return {
+          id: p.id,
+          occupantName: occupant?.name || 'Unknown Occupant',
+          phone: occupant?.phone || '',
+          amount: p.amount,
+          month: p.month,
+          dueDate: p.dueDate
+        };
+      });
+
+    // Run payments through the aggregation engine (aggregates if more than 3 payments are overdue)
+    const aggregatedPaymentAlerts = taskService.aggregateOverduePayments(rawOverduePayments, 3);
+    alertsList.push(...aggregatedPaymentAlerts);
+
+    // 3. Deduplicate and order alerts reactively
+    const dedupedAlerts = taskService.dedupeOperationalAlerts(alertsList);
+    return taskService.orderOperationalAlerts(dedupedAlerts);
+  }, [attendanceSessions, payments, occupants, settings]);
+
+  const handleSendReminder = async (p: any) => {
+    const confirmed = await confirm({
+      title: "Send Fee Reminder?",
+      description: `This will draft and open a WhatsApp payment reminder chat for ${p.occupantName} for the pending amount of ₹${p.amount.toLocaleString()}.`,
+      severity: "low",
+      confirmLabel: "Send Reminder",
+      cancelLabel: "Cancel"
+    });
+
+    if (!confirmed) return;
+
+    const reminderText = settings.paymentSettings.reminderTemplate
+      .replace(/{name}/g, p.occupantName)
+      .replace(/{seatNumber}/g, 'Seat')
+      .replace(/{month}/g, p.month)
+      .replace(/{amount}/g, p.amount.toLocaleString())
+      .replace(/{dueDate}/g, p.dueDate);
+
+    let phone = p.phone || '';
+    phone = phone.replace(/[^0-9]/g, '');
+    if (phone.length === 10) phone = `91${phone}`;
+    
+    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(reminderText)}`, '_blank');
+    showToast(`WhatsApp reminder opened for ${p.occupantName}!`, 'success');
+  };
+
   const filteredTasks = useMemo(() => {
     return tasks.filter(t => 
       activeTab === 'pending' ? !t.isCompleted : t.isCompleted
     );
   }, [tasks, activeTab]);
+
+  // Enrich manually created tasks with occupant Avatar matching
+  const enrichedTasks = useMemo(() => {
+    return filteredTasks.map(task => {
+      const matchedOccupant = occupants.find(occ => 
+        task.title.toLowerCase().includes(occ.name.toLowerCase())
+      );
+      return {
+        ...task,
+        occupant: matchedOccupant
+      };
+    });
+  }, [filteredTasks, occupants]);
 
   const handleToggleTask = async (taskId: string, currentCompleted: boolean) => {
     try {
@@ -124,9 +251,77 @@ export default function Tasks() {
           </button>
         </div>
 
+        {/* System Priorities (Only visible on pending tab) */}
+        {activeTab === 'pending' && systemPriorities.length > 0 && (
+          <div className="space-y-3 animate-in fade-in duration-200">
+            <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1">System Priorities</h5>
+            
+            {systemPriorities.map((priority) => {
+              const isAttendance = priority.type === 'attendance';
+              const isPayment = priority.type === 'payment';
+
+              return (
+                <div 
+                  key={priority.id} 
+                  className={`
+                    rounded-2xl border p-4 shadow-sm flex items-center gap-4 transition-colors
+                    ${isAttendance ? 'bg-[#FFFDFB] border-amber-200 hover:border-amber-300' : ''}
+                    ${isPayment ? 'bg-[#FAF6F6] border-rose-200 hover:border-rose-300' : ''}
+                  `}
+                >
+                  <div 
+                    className={`
+                      w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border
+                      ${isAttendance ? 'bg-amber-50 text-amber-600 border-amber-100' : ''}
+                      ${isPayment ? 'bg-rose-50 text-rose-600 border-rose-100' : ''}
+                    `}
+                  >
+                    {isAttendance ? (
+                      <Clock size={20} className="animate-pulse" />
+                    ) : (
+                      <IndianRupee size={18} />
+                    )}
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-sm font-black text-slate-900 leading-tight">
+                      {priority.title}
+                    </h4>
+                    <p className="text-[11px] font-medium text-slate-500 mt-1">
+                      {priority.description}
+                    </p>
+                  </div>
+                  
+                  <div className="flex gap-2 shrink-0">
+                    {isPayment && !priority.isAggregate && (
+                      <button
+                        onClick={() => handleSendReminder(priority.paymentData)}
+                        className="p-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200/50 rounded-xl transition-all cursor-pointer active:scale-95"
+                        title="Send WhatsApp reminder alert"
+                      >
+                        <MessageCircle size={16} />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => navigate(priority.actionPath || '/')}
+                      className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all cursor-pointer active:scale-95 flex items-center gap-1"
+                    >
+                      {priority.actionLabel || 'Action'} <ArrowRight size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* Task List */}
         <div className="space-y-3">
-          {filteredTasks.map((task) => (
+          {activeTab === 'pending' && enrichedTasks.length > 0 && (
+            <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] ml-1 mt-4">My Checklist</h5>
+          )}
+
+          {enrichedTasks.map((task) => (
             <div 
               key={task.id} 
               className={`
@@ -145,9 +340,14 @@ export default function Tasks() {
               </button>
               
               <div className="flex-1 min-w-0">
-                <h4 className={`text-sm font-bold truncate ${task.isCompleted ? 'text-slate-500 line-through' : 'text-slate-900'}`}>
-                  {task.title}
-                </h4>
+                <div className="flex items-center gap-2">
+                  {task.occupant && (
+                    <Avatar name={task.occupant.name} size="xs" className="shrink-0" />
+                  )}
+                  <h4 className={`text-sm font-bold truncate ${task.isCompleted ? 'text-slate-500 line-through' : 'text-slate-900'}`}>
+                    {task.title}
+                  </h4>
+                </div>
                 <div className="flex items-center gap-3 mt-1">
                   <span className={`flex items-center gap-1 text-[10px] font-bold uppercase ${
                     task.priority === 'High' ? 'text-red-500' : task.priority === 'Medium' ? 'text-amber-500' : 'text-slate-500'
@@ -160,9 +360,31 @@ export default function Tasks() {
                 </div>
               </div>
 
+              {task.occupant && !task.isCompleted && (
+                <button 
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    const confirmed = await confirm({
+                      title: "Contact Occupant?",
+                      description: `Would you like to open a direct WhatsApp chat window with ${task.occupant?.name}?`,
+                      severity: "low",
+                      confirmLabel: "Open Chat",
+                      cancelLabel: "Cancel"
+                    });
+                    if (confirmed) {
+                      window.open(`https://wa.me/${(task.occupant?.phone || '').replace(/\D/g, '')}`, '_blank');
+                    }
+                  }}
+                  className="p-2 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-xl transition-all cursor-pointer shrink-0"
+                  title="WhatsApp Chat"
+                >
+                  <MessageCircle size={18} />
+                </button>
+              )}
+
               <button 
                 onClick={() => handleDeleteTask(task.id, task.title)}
-                className="p-2 text-slate-300 hover:text-rose-600 transition-colors"
+                className="p-2 text-slate-300 hover:text-rose-650 transition-colors shrink-0"
                 title="Delete Task"
               >
                 <Trash2 size={18} />
@@ -170,7 +392,7 @@ export default function Tasks() {
             </div>
           ))}
 
-          {filteredTasks.length === 0 && (
+          {enrichedTasks.length === 0 && (
             <EmptyState 
               icon={ClipboardList}
               title="No tasks here"
