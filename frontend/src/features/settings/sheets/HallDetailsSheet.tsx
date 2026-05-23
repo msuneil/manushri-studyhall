@@ -17,6 +17,9 @@ import {
   isRequired,
 } from "../../../utils/validation";
 import { useSettings } from "../SettingsContext";
+import { useAuth } from "../../../features/auth/AuthContext";
+import { useToast } from "../../../components/Toast";
+import { uploadBase64Image, validateImageUpload, getSanitizedStoragePath } from "../../../lib/firebase/storage";
 
 interface HallDetailsSheetProps {
   isOpen: boolean;
@@ -30,6 +33,8 @@ export function HallDetailsSheet({
   onSave,
 }: HallDetailsSheetProps) {
   const { settings, updateSettings } = useSettings();
+  const { hallId } = useAuth();
+  const { showToast } = useToast();
 
   const [formData, setFormData] = useState({
     name: "",
@@ -91,6 +96,17 @@ export function HallDetailsSheet({
       newErrors.email = "Invalid email format";
     if (formData.phone && !isValidPhone(formData.phone))
       newErrors.phone = "Invalid phone format";
+      
+    // Size and MIME guards
+    if (formData.logo && formData.logo.startsWith("data:image/")) {
+      const sizeLimit = 2 * 1024 * 1024; // 2MB Limit
+      const logoCheck = validateImageUpload(formData.logo, sizeLimit);
+      if (!logoCheck.valid) {
+        showToast(logoCheck.error || "Logo exceeds 2MB limit or is invalid format.", "error");
+        newErrors.logo = logoCheck.error || "Invalid logo format";
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -99,23 +115,39 @@ export function HallDetailsSheet({
     if (!validate()) return;
 
     setIsSaving(true);
-    // Persist globally
-    updateSettings("hallDetails", {
-      name: formData.name,
-      logo: formData.logo,
-      phone: formData.phone,
-      email: formData.email,
-      address: formData.address,
-    });
-    // Simulate network delay
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setIsSaving(false);
-    setIsSuccess(true);
-    markClean();
+    let finalLogoUrl = formData.logo;
 
-    setTimeout(() => {
-      onSave();
-    }, 1000);
+    if (formData.logo && formData.logo.startsWith("data:image/")) {
+      try {
+        const cleanPath = getSanitizedStoragePath(hallId || "unspecified", "branding", "logo.png");
+        showToast("Uploading branding logo...", "info");
+        finalLogoUrl = await uploadBase64Image(cleanPath, formData.logo);
+      } catch (err: any) {
+        console.error("Firebase Storage upload logo failed:", err);
+        showToast(err.message || "Failed to upload logo to online storage. Saved locally.", "error");
+      }
+    }
+
+    try {
+      // Persist globally
+      await updateSettings("hallDetails", {
+        name: formData.name,
+        logo: finalLogoUrl,
+        phone: formData.phone,
+        email: formData.email,
+        address: formData.address,
+      });
+      setIsSuccess(true);
+      markClean();
+      setTimeout(() => {
+        onSave();
+      }, 1000);
+    } catch (e: any) {
+      console.error(e);
+      showToast("Error updating branding settings online.", "error");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (

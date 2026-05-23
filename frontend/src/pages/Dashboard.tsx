@@ -6,6 +6,7 @@ import { useConfirmation } from '../components/Confirmation';
 import { useSettings } from '../features/settings/SettingsContext';
 import { useData } from '../contexts/DataContext';
 import { dashboardService, getActiveBillingMonth } from '../services/dashboardService';
+import { SkeletonStats, SkeletonCards, SkeletonRows } from '../components/common/SkeletonLoader';
 
 // Import clean, modular, scalable subcomponents
 import { BusinessOverview } from '../components/dashboard/BusinessOverview';
@@ -126,9 +127,21 @@ export default function Dashboard() {
   // Premium parchment loading skeleton matching aesthetics
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-[#FAF8F5] space-y-4">
-        <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
-        <p className="text-amber-800/60 font-serif text-sm tracking-wide">Orchestrating command surface...</p>
+      <div className="flex flex-col min-h-screen bg-[#FAF8F5]">
+        <Header title={settings.hallDetails.name || "Manushri Study Hall"} subtitle="Syncing command surface..." />
+        <div className="p-4 md:p-6.5 max-w-7xl mx-auto w-full space-y-8 animate-in fade-in duration-300">
+          <SkeletonStats />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-4">
+              <div className="w-24 h-4 bg-slate-200 rounded-lg animate-pulse" />
+              <SkeletonRows count={3} />
+            </div>
+            <div className="space-y-4">
+              <div className="w-24 h-4 bg-slate-200 rounded-lg animate-pulse" />
+              <SkeletonCards count={2} />
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

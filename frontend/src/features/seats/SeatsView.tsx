@@ -10,6 +10,8 @@ import { NewOccupantSheet } from './sheets/NewOccupantSheet';
 import { useConfirmation } from '../../components/Confirmation';
 import { useData } from '../../contexts/DataContext';
 import type { Seat, Occupant, ActivityEvent } from './types';
+import { useAuth } from '../auth/AuthContext';
+import { uploadBase64Image, getSanitizedStoragePath } from '../../lib/firebase/storage';
 
 const isAllocationBlocked = (status: string): boolean => {
   return status === 'Maintenance' || status === 'Inactive';
@@ -19,6 +21,7 @@ export function SeatsView() {
   const location = useLocation();
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
+  const { hallId } = useAuth();
 
   // Connect to live repository subscriptions orchestrator
   const { 
@@ -272,6 +275,18 @@ export function SeatsView() {
     if (!confirmed) return;
 
     try {
+      let finalPhotoUrl = '';
+      if (newOccupant.profileImage) {
+        try {
+          const cleanPath = getSanitizedStoragePath(hallId || "unspecified", "occupants", `profile-${Date.now()}.png`);
+          showToast("Uploading member photo...", "info");
+          finalPhotoUrl = await uploadBase64Image(cleanPath, newOccupant.profileImage);
+        } catch (err: any) {
+          console.error("Firebase Storage photo upload failed:", err);
+          showToast(err.message || "Failed to upload profile photo to online storage. Onboarded without photo.", "error");
+        }
+      }
+
       const occupantData = {
         name: newOccupant.name,
         seatId: '', 
@@ -283,7 +298,8 @@ export function SeatsView() {
         monthlyFee: newOccupant.monthlyFee ? parseInt(newOccupant.monthlyFee, 10) : 2000,
         planType: newOccupant.planType || 'Full Day',
         emergencyContact: newOccupant.emergencyContact || '',
-        notes: newOccupant.notes || ''
+        notes: newOccupant.notes || '',
+        photoUrl: finalPhotoUrl
       };
 
       await createOccupant(occupantData);

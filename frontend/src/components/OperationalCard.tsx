@@ -63,7 +63,7 @@ export function OperationalCard({ title, subtitle, icon: Icon, avatarNode, badge
 }
 
 // Specialized Card for Members
-export function MemberCard({ name, seat, attendance, status, onCall, onViewProfile, onClick }: any) {
+export function MemberCard({ name, seat, attendance, status, photoUrl, onCall, onViewProfile, onClick }: any) {
   const getBadgeVariant = (s: string) => {
     switch (s) {
       case 'Active': return 'success';
@@ -87,7 +87,7 @@ export function MemberCard({ name, seat, attendance, status, onCall, onViewProfi
     <OperationalCard
       title={name}
       subtitle={`Seat: ${seat}`}
-      avatarNode={<Avatar name={name} size="sm" />}
+      avatarNode={<Avatar name={name} imageUrl={photoUrl} size="sm" />}
       badge={{ text: status, variant: getBadgeVariant(status) }}
       onClick={onClick}
       actions={

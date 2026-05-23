@@ -1,4 +1,6 @@
 
+import { useState, useEffect } from 'react';
+
 export type AvatarSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 
 export interface AvatarProps {
@@ -55,10 +57,27 @@ const SIZE_MAP: Record<AvatarSize, string> = {
   xl: 'w-24 h-24 text-3xl font-black',
 };
 
-export function Avatar({ name, size = 'md', className = '' }: AvatarProps) {
+export function Avatar({ name, imageUrl, size = 'md', className = '' }: AvatarProps) {
+  const [hasError, setHasError] = useState(false);
   const initials = getInitials(name);
   const colorClass = getDeterministicColor(name);
   const sizeClass = SIZE_MAP[size];
+
+  // Reset error state if the imageUrl prop changes
+  useEffect(() => {
+    setHasError(false);
+  }, [imageUrl]);
+
+  if (imageUrl && !hasError) {
+    return (
+      <img
+        src={imageUrl}
+        alt={name}
+        onError={() => setHasError(true)}
+        className={`object-cover rounded-full shrink-0 select-none shadow-xs ${sizeClass} ${className}`}
+      />
+    );
+  }
 
   return (
     <div
