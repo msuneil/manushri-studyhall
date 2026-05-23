@@ -21,12 +21,19 @@ import {
   Calendar
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../features/auth/AuthContext';
 import { Avatar } from '../components/common/Avatar';
 import { useConfirmation } from '../components/Confirmation';
+import { 
+  validateOccupantOnboarding, 
+  preventDuplicateActiveAssignments, 
+  occupantService 
+} from '../services/occupantService';
 
 export default function Occupants() {
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
+  const { hallId, user } = useAuth();
   
   // Real database streams and actions
   const { 
@@ -221,10 +228,25 @@ export default function Occupants() {
   const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
+    const validationError = validateOccupantOnboarding({
+      name: formName,
+      phone: formPhone,
+      planType: formPlan
+    });
+    if (validationError) {
+      showToast(validationError, 'error');
+      return;
+    }
+
     const selectedRoomObj = rooms.find(r => r.name === formRoom || r.id === formRoom);
     const availableSeat = selectedRoomObj
       ? seats.find(s => s.roomId === selectedRoomObj.id && !s.isOccupied)
       : null;
+
+    if (availableSeat && preventDuplicateActiveAssignments(occupants, '', availableSeat.id)) {
+      showToast('This seat is already assigned to another occupant.', 'error');
+      return;
+    }
 
     try {
       const newOccId = await createOccupant({
@@ -861,10 +883,21 @@ export default function Occupants() {
                     if (confirmed) {
                       try {
                         if (selectedOccupant.seatId && selectedOccupant.seatId !== 'N/A') {
-                          await updateSeat(selectedOccupant.seatId, { isOccupied: false, occupantId: '' });
+                          await occupantService.transferSeatAssignment(
+                            hallId!,
+                            user?.uid || user?.id || hallId!,
+                            selectedOccupant.id,
+                            selectedOccupant.seatId,
+                            availableSeat.id
+                          );
+                        } else {
+                          await occupantService.assignSeatToOccupant(
+                            hallId!,
+                            user?.uid || user?.id || hallId!,
+                            selectedOccupant.id,
+                            availableSeat.id
+                          );
                         }
-                        await updateSeat(availableSeat.id, { isOccupied: true, occupantId: selectedOccupant.id });
-                        await updateOccupant(selectedOccupant.id, { seatId: availableSeat.id });
                         
                         setSelectedOccupant((prev: any) => ({ ...prev, seatId: availableSeat.id, seatNumber: availableSeat.number }));
                         showToast(`Seat transferred to ${availableSeat.number} successfully!`, 'success');
@@ -896,10 +929,12 @@ export default function Occupants() {
                     });
                     if (confirmed) {
                       try {
-                        if (selectedOccupant.seatId && selectedOccupant.seatId !== 'N/A') {
-                          await updateSeat(selectedOccupant.seatId, { isOccupied: false, occupantId: '' });
-                        }
-                        await updateOccupant(selectedOccupant.id, { seatId: 'N/A', status: 'Inactive' });
+                        await occupantService.vacateSeatAssignment(
+                          hallId!,
+                          user?.uid || user?.id || hallId!,
+                          selectedOccupant.id
+                        );
+                        await updateOccupant(selectedOccupant.id, { status: 'Inactive' });
                         setSelectedOccupant(null);
                         showToast(`Vacate request completed. ${selectedOccupant.name} is now marked inactive.`, 'success');
                       } catch (err) {

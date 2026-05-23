@@ -2,6 +2,7 @@ import {
   collection, 
   doc, 
   getDoc,
+  getDocs,
   query, 
   where, 
   orderBy,
@@ -109,7 +110,7 @@ export const occupantRepository = {
 
     if (snap.exists()) {
       const data = snap.data() as Occupant;
-      if (data.seatId) {
+      if (data.seatId && data.seatId !== 'N/A') {
         batch.update(doc(db, 'seats', data.seatId), {
           isOccupied: false,
           occupantId: '',
@@ -119,6 +120,75 @@ export const occupantRepository = {
     }
 
     await batch.commit();
+  },
+
+  archiveOccupant: async (occupantId: string, operatorId: string) => {
+    const now = new Date().toISOString();
+    const occRef = doc(db, 'occupants', occupantId);
+    const snap = await getDoc(occRef);
+    const batch = writeBatch(db);
+
+    batch.update(occRef, {
+      isActive: false,
+      status: 'Left' as any,
+      deletedAt: now,
+      archivedAt: now,
+      ...updateMetadata(operatorId),
+    });
+
+    if (snap.exists()) {
+      const data = snap.data() as Occupant;
+      if (data.seatId && data.seatId !== 'N/A') {
+        batch.update(doc(db, 'seats', data.seatId), {
+          isOccupied: false,
+          occupantId: '',
+          ...updateMetadata(operatorId)
+        });
+      }
+    }
+
+    await batch.commit();
+  },
+
+  deactivateOccupant: async (occupantId: string, operatorId: string) => {
+    const occRef = doc(db, 'occupants', occupantId);
+    const snap = await getDoc(occRef);
+    const batch = writeBatch(db);
+
+    batch.update(occRef, {
+      status: OccupantStatus.INACTIVE,
+      seatId: 'N/A',
+      ...updateMetadata(operatorId),
+    });
+
+    if (snap.exists()) {
+      const data = snap.data() as Occupant;
+      if (data.seatId && data.seatId !== 'N/A') {
+        batch.update(doc(db, 'seats', data.seatId), {
+          isOccupied: false,
+          occupantId: '',
+          ...updateMetadata(operatorId)
+        });
+      }
+    }
+
+    await batch.commit();
+  },
+
+  getActiveOccupants: async (hallId: string): Promise<Occupant[]> => {
+    const q = query(
+      collection(db, 'occupants'),
+      where('hallId', '==', hallId),
+      where('isActive', '==', true),
+      where('status', '==', 'Active'),
+      orderBy('createdAt', 'desc')
+    );
+    const snap = await getDocs(q);
+    const occupants: Occupant[] = [];
+    snap.forEach((docSnap) => {
+      occupants.push({ id: docSnap.id, ...docSnap.data() } as Occupant);
+    });
+    return occupants;
   }
 };
 
