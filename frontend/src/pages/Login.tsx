@@ -1,16 +1,27 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Armchair, Mail, Lock, ChevronRight } from 'lucide-react';
+import { Armchair, Mail, Lock, ChevronRight, Loader2 } from 'lucide-react';
+import { useAuth } from '../features/auth/AuthContext';
 
 export default function Login() {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // In a real app, logic would go here
-    navigate('/');
+    if (loading) return;
+    setLoading(true);
+    try {
+      await login(email, password);
+      navigate('/');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -60,10 +71,22 @@ export default function Login() {
 
             <button 
               type="submit"
-              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-500/25 flex items-center justify-center gap-2 group active:scale-95 transition-all"
+              disabled={loading}
+              className={`w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-500/25 flex items-center justify-center gap-2 group active:scale-95 transition-all ${
+                loading ? 'opacity-80 cursor-not-allowed' : ''
+              }`}
             >
-              Sign In
-              <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+              {loading ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  Signing In...
+                </>
+              ) : (
+                <>
+                  Sign In
+                  <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
             </button>
           </form>
 

@@ -1,52 +1,77 @@
 import { useState, useMemo } from 'react';
-import { Header } from '../components/Header';
-import { 
-  Armchair, 
-  IndianRupee, 
-  CheckCircle2, 
-  AlertCircle,
-  Clock,
-  MessageCircle,
-  PlusCircle,
-  Sparkles,
-  Lock,
-  Calendar
-} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { tasks as mockTasks, payments as mockPayments, occupants, seats } from '../data/mockData';
-import { Avatar } from '../components/common/Avatar';
+import { Header } from '../components/Header';
 import { useToast } from '../components/Toast';
 import { useConfirmation } from '../components/Confirmation';
 import { useSettings } from '../features/settings/SettingsContext';
+import { useData } from '../contexts/DataContext';
+import { dashboardService } from '../services/dashboardService';
+
+// Import clean, modular, scalable subcomponents
+import { BusinessOverview } from '../components/dashboard/BusinessOverview';
+import { OccupancyOverview } from '../components/dashboard/OccupancyOverview';
+import { QuickActions } from '../components/dashboard/QuickActions';
+import { DefaultersList } from '../components/dashboard/DefaultersList';
+import { PriorityQueue } from '../components/dashboard/PriorityQueue';
+import { TasksWidget } from '../components/dashboard/TasksWidget';
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
   const { settings } = useSettings();
+  
+  // Connect to the lightweight live orchestrator context
+  const {
+    rooms,
+    seats,
+    occupants,
+    payments,
+    attendanceSessions,
+    tasks,
+    expenses,
+    loading,
+    updateTask
+  } = useData();
 
-  // Local state to support interactive completions on Dashboard
-  const [taskList, setTaskList] = useState(mockTasks);
-  const [paymentList, setPaymentList] = useState(mockPayments);
+  // Local state to manage exiting task check animations
+  const [completingTasks, setCompletingTasks] = useState<string[]>([]);
 
-  const occupancyRate = Math.round((seats.filter(s => s.isOccupied).length / seats.length) * 100);
-  const pendingPayments = paymentList.filter(p => p.status !== 'Paid').length;
-  const todayTasks = taskList.filter(t => !t.isCompleted).length;
+  const activeMonth = 'May 2026';
 
-  const quickActions = [
-    { label: 'Attendance', icon: CheckCircle2, color: 'bg-green-600', path: '/attendance' },
-    { label: 'Payments', icon: IndianRupee, color: 'bg-indigo-600', path: '/payments' },
-    { label: 'Occupants', icon: PlusCircle, color: 'bg-indigo-500', path: '/occupants' },
-    { label: 'Seats & Halls', icon: Armchair, color: 'bg-slate-900', path: '/seats' },
-  ];
+  // Reactively calculate financial metrics
+  const financialMetrics = useMemo(() => {
+    return dashboardService.calculateFinancialMetrics(payments, expenses, activeMonth);
+  }, [payments, expenses, activeMonth]);
 
-  const stats = [
-    { label: 'Dues Pending', value: pendingPayments.toString(), icon: AlertCircle, subValue: 'Action Required', alert: true, path: '/payments' },
-    { label: 'Today\'s Tasks', value: todayTasks.toString(), icon: Clock, subValue: 'Pending items', alert: false, path: '/tasks' },
-    { label: 'Occupancy', value: `${occupancyRate}%`, icon: Armchair, subValue: `${seats.filter(s => s.isOccupied).length}/${seats.length} Seats`, alert: false, path: '/seats' },
-  ];
+  // Reactively calculate seat occupancy and utilization metrics
+  const occupancyMetrics = useMemo(() => {
+    return dashboardService.calculateOccupancyMetrics(seats, rooms);
+  }, [seats, rooms]);
 
-  // Inline WhatsApp Reminder dispatch
+  // Reactively calculate the enriched active defaulters list
+  const enrichedOverduePayments = useMemo(() => {
+    return dashboardService.enrichDefaultersList(payments, occupants, seats);
+  }, [payments, occupants, seats]);
+
+  // Reactively calculate priority queue rankings
+  const priorityQueue = useMemo(() => {
+    return dashboardService.derivePriorityQueue(
+      enrichedOverduePayments.length,
+      financialMetrics.pendingDues,
+      occupancyMetrics,
+      tasks,
+      attendanceSessions,
+      occupants
+    );
+  }, [enrichedOverduePayments, financialMetrics, occupancyMetrics, tasks, attendanceSessions, occupants]);
+
+  // Filter tasks to show active ones or those currently undergoing completion fade-out
+  const activeTasks = useMemo(() => {
+    return tasks.filter(t => !t.isCompleted || completingTasks.includes(t.id));
+  }, [tasks, completingTasks]);
+
+  // Inline WhatsApp Reminder dispatcher using templates
   const handleSendReminder = async (p: any) => {
     const confirmed = await confirm({
       title: "Send Fee Reminder?",
@@ -73,183 +98,97 @@ export default function Dashboard() {
     showToast(`WhatsApp reminder opened for ${p.occupantName}!`, 'success');
   };
 
-  // Inline task completion simulation
-  const handleCompleteTask = (taskId: string, title: string) => {
-    setTaskList(prev => prev.map(t => t.id === taskId ? { ...t, isCompleted: true } : t));
-    showToast(`Completed: "${title}"`, 'success');
+  // Perform live Firestore update with temporary completion fade state
+  const handleCompleteTask = async (taskId: string, title: string) => {
+    if (completingTasks.includes(taskId)) return;
+
+    setCompletingTasks(prev => [...prev, taskId]);
+
+    try {
+      await updateTask(taskId, { isCompleted: true });
+      showToast(`Completed: "${title}"`, 'success');
+    } catch (error) {
+      console.error('Task complete error:', error);
+      showToast('Failed to complete task.', 'error');
+    } finally {
+      setTimeout(() => {
+        setCompletingTasks(prev => prev.filter(id => id !== taskId));
+      }, 300);
+    }
   };
 
-  const enrichedOverduePayments = useMemo(() => {
-    return paymentList
-      .filter(p => p.status === 'Overdue')
-      .map(p => {
-        const occupant = occupants.find(o => o.id === p.occupantId);
-        const seat = seats.find(s => s.id === occupant?.seatId);
-        return {
-          ...p,
-          occupantName: occupant?.name || 'Unknown',
-          seatNumber: seat?.number || 'N/A',
-          phone: occupant?.phone || '',
-        };
-      });
-  }, [paymentList]);
+  // Click on priority queue row to seamlessly transition to relevant view
+  const handlePriorityClick = (item: any) => {
+    navigate(item.actionPath);
+  };
 
-  const activeTasks = useMemo(() => {
-    return taskList.filter(t => !t.isCompleted);
-  }, [taskList]);
+  // Premium parchment loading skeleton matching aesthetics
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#FAF8F5] space-y-4">
+        <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-amber-800/60 font-serif text-sm tracking-wide">Orchestrating command surface...</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex flex-col min-h-full">
-      <Header title={settings.hallDetails.name} subtitle="Study Hall Management" />
+    <div className="flex flex-col min-h-full bg-[#FAF8F5]">
+      <Header title={settings.hallDetails.name} subtitle="Business Command Center" />
 
-      <div className="p-4 md:p-8 max-w-7xl mx-auto w-full space-y-6">
+      <div className="p-4 md:p-6.5 max-w-7xl mx-auto w-full space-y-7.5 animate-in fade-in duration-200">
         
-        {/* 1. Branded Operational Snapshot */}
-        <div className="bg-indigo-50/70 border border-indigo-150/40 rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm animate-in fade-in duration-200">
-          <div className="flex flex-wrap gap-2 items-center">
-            <span className="text-[9px] font-black text-indigo-900 bg-indigo-100/60 px-2 py-0.5 rounded uppercase tracking-wider">Focus</span>
-            
-            <div className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-100 rounded text-[10px] font-bold text-slate-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-              <span>{enrichedOverduePayments.length} Overdue Dues</span>
-            </div>
-            
-            <div className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-100 rounded text-[10px] font-bold text-slate-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-              <span>{todayTasks} Pending Tasks</span>
-            </div>
+        {/* 1. Occupancy & Seat Utilization */}
+        <OccupancyOverview 
+          totalSeats={occupancyMetrics.totalSeats}
+          occupiedSeats={occupancyMetrics.occupiedSeats}
+          availableSeats={occupancyMetrics.availableSeats}
+          acRate={occupancyMetrics.acRate}
+          nonAcRate={occupancyMetrics.nonAcRate}
+          acOccupied={occupancyMetrics.acOccupied}
+          acTotal={occupancyMetrics.acTotal}
+          nonAcOccupied={occupancyMetrics.nonAcOccupied}
+          nonAcTotal={occupancyMetrics.nonAcTotal}
+          onNavigateToSeats={() => navigate('/seats')}
+        />
 
-            <div className="flex items-center gap-1 px-2 py-0.5 bg-white border border-slate-100 rounded text-[10px] font-bold text-slate-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shrink-0 animate-pulse" />
-              <span>Attendance in Draft</span>
-            </div>
-          </div>
-          
-          <button 
-            onClick={() => navigate('/attendance')}
-            className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-[10px] font-black uppercase tracking-wider transition-all active:scale-95 shadow-sm cursor-pointer self-start sm:self-center flex items-center gap-1"
-          >
-            <Calendar size={11} />
-            Review
-          </button>
-        </div>
+        {/* 2. Operational Priorities */}
+        <PriorityQueue 
+          priorityQueue={priorityQueue}
+          onPriorityClick={handlePriorityClick}
+          onActionClick={navigate}
+        />
 
-        {/* 2. Refined Quick Actions - Compact Horizontal Strip */}
-        <section>
-          <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 px-1">Quick Actions</h3>
-          <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0">
-            {quickActions.map((action) => (
-              <button
-                key={action.label}
-                onClick={() => navigate(action.path)}
-                className="flex items-center gap-2.5 px-4.5 py-3 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-95 shrink-0 cursor-pointer hover:border-indigo-100"
-              >
-                <div className={`p-1.5 rounded-lg ${action.color} text-white`}>
-                  <action.icon size={14} />
-                </div>
-                <span className="text-xs font-bold text-slate-700">{action.label}</span>
-              </button>
-            ))}
-          </div>
-        </section>
+        {/* 3. Quick Actions */}
+        <QuickActions onNavigate={navigate} />
 
-        {/* 3. Clickable Operational Summary Cards */}
-        <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {stats.map((stat) => (
-            <div 
-              key={stat.label} 
-              onClick={() => navigate(stat.path)}
-              className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between hover:shadow-md hover:border-indigo-100 transition-all active:scale-[0.98] cursor-pointer group"
-            >
-              <div className="space-y-1">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{stat.label}</p>
-                <p className="text-2xl font-black text-slate-900 group-hover:text-indigo-600 transition-colors">{stat.value}</p>
-                <p className={`text-[10px] font-bold ${stat.alert ? 'text-red-500' : 'text-slate-400'}`}>{stat.subValue}</p>
-              </div>
-              <div className={`p-4 rounded-2xl transition-all ${stat.alert ? 'bg-red-50 text-red-600 group-hover:bg-red-100' : 'bg-slate-50 text-slate-400 group-hover:bg-indigo-50 group-hover:text-indigo-600'}`}>
-                <stat.icon size={24} />
-              </div>
-            </div>
-          ))}
-        </section>
+        {/* 4. Actionable Defaulters List */}
+        <DefaultersList 
+          defaulters={enrichedOverduePayments}
+          onSendReminder={handleSendReminder}
+          onNavigateToPayments={() => navigate('/payments')}
+        />
 
-        {/* 4. Dynamic Alerts & Lists with Empty States */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Immediate Dues (Actionable List) */}
-          <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 text-sm">Immediate Overdue Dues</h3>
-              <button onClick={() => navigate('/payments')} className="text-xs font-black text-indigo-600 uppercase hover:underline tracking-wider">View All</button>
-            </div>
-            
-            <div className="divide-y divide-slate-100 flex-1 flex flex-col justify-center">
-              {enrichedOverduePayments.length > 0 ? (
-                enrichedOverduePayments.slice(0, 3).map((payment) => (
-                  <div key={payment.id} className="p-4 flex items-center justify-between hover:bg-slate-50/50 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={payment.occupantName} size="sm" />
-                      <div>
-                        <p className="text-sm font-bold text-slate-900">{payment.occupantName}</p>
-                        <p className="text-[10px] font-semibold text-slate-400">
-                          Seat {payment.seatNumber} • <span className="text-rose-600 font-extrabold">₹{payment.amount.toLocaleString()}</span> overdue since {payment.dueDate}
-                        </p>
-                      </div>
-                    </div>
-                    <button 
-                      onClick={() => handleSendReminder(payment)}
-                      className="p-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-xl transition-all active:scale-90 cursor-pointer"
-                      title="Send WhatsApp Reminder"
-                    >
-                      <MessageCircle size={16} />
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div className="p-8 text-center space-y-2 animate-in fade-in duration-200">
-                  <span className="inline-flex p-3 bg-emerald-50 text-emerald-600 rounded-full">
-                    <CheckCircle2 size={24} />
-                  </span>
-                  <p className="text-xs font-bold text-slate-800">No overdue dues today!</p>
-                  <p className="text-[10px] font-medium text-slate-400">All student ledger cycles are in perfect order.</p>
-                </div>
-              )}
-            </div>
-          </section>
+        {/* 5. Tasks Checklist */}
+        <TasksWidget 
+          tasks={activeTasks}
+          completingTasks={completingTasks}
+          onCompleteTask={handleCompleteTask}
+          onNavigateToTasks={() => navigate('/tasks')}
+        />
 
-          {/* Today's Tasks (Actionable List) */}
-          <section className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 text-sm">Today's Pending Tasks</h3>
-              <button onClick={() => navigate('/tasks')} className="text-xs font-black text-indigo-600 uppercase tracking-wider hover:underline">View All</button>
-            </div>
-            
-            <div className="p-4 space-y-3 flex-1 flex flex-col justify-center">
-              {activeTasks.length > 0 ? (
-                activeTasks.slice(0, 3).map((task) => (
-                  <div key={task.id} className="flex items-center gap-3 p-3 bg-slate-50 hover:bg-slate-100/50 rounded-2xl border border-slate-200/60 transition-colors">
-                    <div className={`w-2 h-2 rounded-full shrink-0 ${task.priority === 'High' ? 'bg-red-500' : 'bg-amber-500'}`} />
-                    <span className="text-xs font-bold text-slate-700 flex-1">{task.title}</span>
-                    <button 
-                      onClick={() => handleCompleteTask(task.id, task.title)}
-                      className="text-[9px] font-black uppercase text-indigo-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-indigo-50 hover:border-indigo-150 transition-all active:scale-95 cursor-pointer"
-                    >
-                      Done
-                    </button>
-                  </div>
-                ))
-              ) : (
-                <div className="p-8 text-center space-y-2 animate-in fade-in duration-200">
-                  <span className="inline-flex p-3 bg-indigo-50 text-indigo-600 rounded-full">
-                    <Sparkles size={24} />
-                  </span>
-                  <p className="text-xs font-bold text-slate-800">All tasks checked off!</p>
-                  <p className="text-[10px] font-medium text-slate-400">Your daily operational queue is fully cleared.</p>
-                </div>
-              )}
-            </div>
-          </section>
-        </div>
+        {/* 6. Monthly Business Snapshot */}
+        <BusinessOverview 
+          expectedIncome={financialMetrics.expectedIncome}
+          collectedRevenue={financialMetrics.collectedRevenue}
+          pendingDues={financialMetrics.pendingDues}
+          monthlyExpenses={financialMetrics.monthlyExpenses}
+          estimatedProfit={financialMetrics.estimatedProfit}
+          onNavigateToPayments={() => navigate('/payments')}
+        />
+
       </div>
     </div>
   );
 }
+

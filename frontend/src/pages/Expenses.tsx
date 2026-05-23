@@ -10,25 +10,69 @@ import {
   Receipt
 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
-import { expenses } from '../data/mockData';
+import { useData } from '../contexts/DataContext';
+import { useToast } from '../components/Toast';
 
 export default function Expenses() {
+  const { expenses, loading, createExpense } = useData();
+  const { showToast } = useToast();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showAdd, setShowAdd] = useState(false);
+
+  // Controlled form state
+  const [formCategory, setFormCategory] = useState('Electricity');
+  const [formAmount, setFormAmount] = useState('');
+  const [formDate, setFormDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [formDescription, setFormDescription] = useState('');
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter(exp => 
       exp.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
       exp.description.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery]);
+  }, [expenses, searchQuery]);
 
   const stats = useMemo(() => {
     return {
       total: expenses.reduce((sum, exp) => sum + exp.amount, 0),
       count: expenses.length
     };
-  }, []);
+  }, [expenses]);
+
+  const handleSaveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountNum = parseFloat(formAmount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+      showToast('Please enter a valid amount', 'error');
+      return;
+    }
+
+    try {
+      const monthStr = new Date(formDate).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }); // e.g. "May 2026"
+      await createExpense(formCategory, amountNum, formDate, formDescription, monthStr);
+      showToast('Expense recorded successfully', 'success');
+      setShowAdd(false);
+      
+      // Reset form
+      setFormCategory('Electricity');
+      setFormAmount('');
+      setFormDate(new Date().toISOString().split('T')[0]);
+      setFormDescription('');
+    } catch (error) {
+      console.error(error);
+      showToast('Failed to record expense', 'error');
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-3 bg-[#FAF8F5]">
+        <div className="w-12 h-12 border-4 border-amber-600/20 border-t-amber-600 rounded-full animate-spin"></div>
+        <p className="text-amber-800/60 font-bold text-xs uppercase tracking-widest animate-pulse">Loading Expenses...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">
@@ -39,7 +83,7 @@ export default function Expenses() {
         action={
           <button 
             onClick={() => setShowAdd(true)}
-            className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-500/20"
+            className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-500/20 animate-none hover:scale-105 active:scale-95 transition-transform"
           >
             <Plus size={20} />
           </button>
@@ -54,7 +98,7 @@ export default function Expenses() {
           </div>
           <div>
             <p className="text-[10px] font-black text-slate-400 uppercase">Total Expenses</p>
-            <p className="text-lg font-black text-slate-900">₹{stats.total.toLocaleString()}</p>
+            <p className="text-lg font-black text-slate-900">₹{stats.total.toLocaleString('en-IN')}</p>
           </div>
         </div>
 
@@ -85,7 +129,7 @@ export default function Expenses() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-black text-slate-900">₹{exp.amount.toLocaleString()}</span>
+                  <span className="text-sm font-black text-slate-900">₹{exp.amount.toLocaleString('en-IN')}</span>
                   <ChevronRight size={16} className="text-slate-300" />
                 </div>
               </div>
@@ -112,33 +156,46 @@ export default function Expenses() {
         actions={
           <div className="grid grid-cols-2 gap-3 w-full">
             <button 
+              type="button"
               onClick={() => setShowAdd(false)}
               className="py-4 bg-slate-100 text-slate-700 rounded-2xl font-bold text-sm"
             >
               Cancel
             </button>
-            <button className="py-4 bg-indigo-600 text-white rounded-2xl font-bold text-sm shadow-lg shadow-indigo-500/20">
+            <button 
+              type="submit"
+              form="add-expense-form"
+              className="py-4 bg-indigo-600 text-white rounded-2xl font-bold text-sm shadow-lg shadow-indigo-500/20"
+            >
               Save Expense
             </button>
           </div>
         }
       >
-        <div className="space-y-4">
+        <form id="add-expense-form" onSubmit={handleSaveExpense} className="space-y-4">
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Category</label>
-            <select className="w-full px-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold mt-1">
-              <option>Electricity</option>
-              <option>Rent</option>
-              <option>Maintenance</option>
-              <option>Cleaning</option>
-              <option>Other</option>
+            <select 
+              value={formCategory}
+              onChange={(e) => setFormCategory(e.target.value)}
+              className="w-full px-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold mt-1"
+            >
+              <option value="Electricity">Electricity</option>
+              <option value="Rent">Rent</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Cleaning">Cleaning</option>
+              <option value="Other">Other</option>
             </select>
           </div>
           <div>
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Amount (₹)</label>
             <input 
               type="number" 
+              required
+              min="1"
               placeholder="0.00" 
+              value={formAmount}
+              onChange={(e) => setFormAmount(e.target.value)}
               className="w-full px-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-sm mt-1"
             />
           </div>
@@ -146,7 +203,9 @@ export default function Expenses() {
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Date</label>
             <input 
               type="date" 
-              defaultValue={new Date().toISOString().split('T')[0]}
+              required
+              value={formDate}
+              onChange={(e) => setFormDate(e.target.value)}
               className="w-full px-4 py-3 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-bold mt-1"
             />
           </div>
@@ -154,10 +213,12 @@ export default function Expenses() {
             <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Description</label>
             <textarea 
               placeholder="Optional details..." 
+              value={formDescription}
+              onChange={(e) => setFormDescription(e.target.value)}
               className="w-full px-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none text-sm font-medium h-24 resize-none mt-1"
             />
           </div>
-        </div>
+        </form>
       </Modal>
     </div>
   );

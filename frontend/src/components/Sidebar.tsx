@@ -10,9 +10,21 @@ import {
   Settings,
   LogOut
 } from 'lucide-react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useNavigate } from 'react-router-dom';
+import { useAuth } from '../features/auth/AuthContext';
 
 export function Sidebar() {
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      console.error(err);
+    }
+  };
   const menuItems = [
     { icon: LayoutDashboard, label: 'Dashboard', path: '/' },
     { icon: DoorOpen, label: 'Rooms', path: '/rooms' },
@@ -59,7 +71,10 @@ export function Sidebar() {
       </nav>
 
       <div className="p-4 border-t border-slate-100">
-        <button className="flex items-center gap-3 w-full px-4 py-3 text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-xl transition-colors">
+        <button 
+          onClick={handleLogout}
+          className="flex items-center gap-3 w-full px-4 py-3 text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-xl transition-colors cursor-pointer"
+        >
           <LogOut size={20} />
           <span className="text-sm font-medium">Logout</span>
         </button>

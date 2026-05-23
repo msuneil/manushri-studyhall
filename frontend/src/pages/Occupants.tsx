@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Header } from '../components/Header';
 import { Modal } from '../components/Modal';
 import { MemberCard } from '../components/OperationalCard';
@@ -20,7 +20,7 @@ import {
   IndianRupee,
   Calendar
 } from 'lucide-react';
-import { occupants, seats, rooms } from '../data/mockData';
+import { useData } from '../contexts/DataContext';
 import { Avatar } from '../components/common/Avatar';
 import { useConfirmation } from '../components/Confirmation';
 
@@ -28,6 +28,22 @@ export default function Occupants() {
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
   
+  // Real database streams and actions
+  const { 
+    occupants, 
+    seats, 
+    rooms, 
+    payments, 
+    attendanceSessions,
+    loading, 
+    createOccupant, 
+    updateOccupant, 
+    updateSeat, 
+    createPayment,
+    updatePayment,
+    saveAttendanceSession 
+  } = useData();
+
   // Persistence & layout view toggle
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('occupants_view_mode') as 'grid' | 'list') || 'grid';
@@ -55,30 +71,34 @@ export default function Occupants() {
   const [formName, setFormName] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formEmergency, setFormEmergency] = useState('');
-  const [formRoom, setFormRoom] = useState(rooms[0]?.name || '');
+  const [formRoom, setFormRoom] = useState('');
   const [formDate, setFormDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [formPlan, setFormPlan] = useState('Full Day');
   const [formAadhaar, setFormAadhaar] = useState('');
 
-  // Local occupants list state to allow interactive onboarding
-  const [occupantList, setOccupantList] = useState<any[]>(occupants);
+  // Synchronize form room selection with available rooms
+  useEffect(() => {
+    if (rooms && rooms.length > 0 && !formRoom) {
+      setFormRoom(rooms[0].name);
+    }
+  }, [rooms, formRoom]);
 
   // dynamic warning checks
   const phoneWarning = useMemo(() => {
     const cleanPhone = formPhone.trim().replace(/\D/g, '');
     if (!cleanPhone) return null;
-    const match = occupantList.find(o => o.phone.trim().replace(/\D/g, '') === cleanPhone);
+    const match = occupants.find(o => o.phone.trim().replace(/\D/g, '') === cleanPhone);
     return match ? match.name : null;
-  }, [formPhone, occupantList]);
+  }, [formPhone, occupants]);
 
   const aadhaarWarning = useMemo(() => {
     const cleanAadhaar = formAadhaar.trim().replace(/\s+/g, '');
     if (!cleanAadhaar) return false;
-    return occupantList.some(o => o.aadhaar === cleanAadhaar || cleanAadhaar === '123456789012');
-  }, [formAadhaar, occupantList]);
+    return occupants.some(o => o.notes?.includes(cleanAadhaar) || cleanAadhaar === '123456789012');
+  }, [formAadhaar, occupants]);
 
   const filteredOccupants = useMemo(() => {
-    let list = occupantList.map(occ => {
+    let list = occupants.map(occ => {
       const seat = seats.find(s => s.id === occ.seatId);
       return {
         ...occ,
@@ -111,10 +131,15 @@ export default function Occupants() {
 
     // 4. Payment Dues Filter
     if (duesFilter === 'dues') {
-      // Amit (occ-3) represents the overdue candidate in default mock data
-      list = list.filter(occ => occ.id === 'occ-3');
+      const overdueOccupantIds = payments
+        .filter(p => p.status === 'Pending' || p.status === 'Overdue')
+        .map(p => p.occupantId);
+      list = list.filter(occ => overdueOccupantIds.includes(occ.id));
     } else if (duesFilter === 'paid') {
-      list = list.filter(occ => occ.id !== 'occ-3');
+      const overdueOccupantIds = payments
+        .filter(p => p.status === 'Pending' || p.status === 'Overdue')
+        .map(p => p.occupantId);
+      list = list.filter(occ => !overdueOccupantIds.includes(occ.id));
     }
 
     // 5. Attendance Risk Filter
@@ -136,10 +161,10 @@ export default function Occupants() {
     }
 
     return list;
-  }, [occupantList, searchQuery, statusFilter, seatFilter, duesFilter, riskFilter, roomFilter, planFilter]);
+  }, [occupants, seats, payments, searchQuery, statusFilter, seatFilter, duesFilter, riskFilter, roomFilter, planFilter]);
 
   const emptyStateDetails = useMemo(() => {
-    if (occupantList.length === 0) {
+    if (occupants.length === 0) {
       return {
         icon: Users,
         title: "No occupants found",
@@ -191,36 +216,75 @@ export default function Occupants() {
       };
     }
     return null;
-  }, [occupantList, filteredOccupants, searchQuery, roomFilter, statusFilter]);
+  }, [occupants, filteredOccupants, searchQuery, roomFilter, statusFilter]);
 
-  const handleAddSubmit = (e: React.FormEvent) => {
+  const handleAddSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const newOcc = {
-      id: `occ-${Date.now()}`,
-      name: formName,
-      phone: formPhone,
-      email: `${formName.toLowerCase().replace(/\s+/g, '')}@example.com`,
-      emergencyContact: formEmergency,
-      status: 'Active',
-      seatId: 'N/A',
-      attendanceRate: 100,
-      joinDate: formDate,
-      planType: formPlan,
-      aadhaar: formAadhaar
-    };
+    const selectedRoomObj = rooms.find(r => r.name === formRoom || r.id === formRoom);
+    const availableSeat = selectedRoomObj
+      ? seats.find(s => s.roomId === selectedRoomObj.id && !s.isOccupied)
+      : null;
 
-    setOccupantList(prev => [newOcc, ...prev]);
-    showToast('New occupant added successfully', 'success');
-    setShowAdd(false);
+    try {
+      const newOccId = await createOccupant({
+        name: formName,
+        phone: formPhone,
+        email: `${formName.toLowerCase().replace(/\s+/g, '')}@example.com`,
+        emergencyContact: formEmergency,
+        status: 'Active',
+        seatId: availableSeat ? availableSeat.id : 'N/A',
+        attendanceRate: 100,
+        joinDate: formDate,
+        planType: formPlan as any,
+        monthlyFee: 2000,
+        notes: formAadhaar ? `Aadhaar: ${formAadhaar}` : ''
+      });
 
-    // Reset Onboarding Form
-    setFormName('');
-    setFormPhone('');
-    setFormEmergency('');
-    setFormAadhaar('');
-    setFormPlan('Full Day');
+      if (availableSeat) {
+        await updateSeat(availableSeat.id, { isOccupied: true, occupantId: newOccId });
+      }
+
+      showToast(`New occupant ${formName} added successfully${availableSeat ? ` and assigned to seat ${availableSeat.number}` : ''}`, 'success');
+      setShowAdd(false);
+
+      // Reset Onboarding Form
+      setFormName('');
+      setFormPhone('');
+      setFormEmergency('');
+      setFormAadhaar('');
+      setFormPlan('Full Day');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to onboarding candidate. Please try again.', 'error');
+    }
   };
+  const memberStats = useMemo(() => {
+    if (!selectedOccupant) return { paid: 0, dues: 0 };
+    const memberPayments = payments.filter(p => p.occupantId === selectedOccupant.id);
+    const paid = memberPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + p.amount, 0);
+    const dues = memberPayments.filter(p => p.status === 'Pending' || p.status === 'Overdue').reduce((sum, p) => sum + p.amount, 0);
+    return { paid, dues };
+  }, [selectedOccupant, payments]);
+
+  const memberPaymentsList = useMemo(() => {
+    if (!selectedOccupant) return [];
+    return payments
+      .filter(p => p.occupantId === selectedOccupant.id)
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 3);
+  }, [selectedOccupant, payments]);
+
+
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] gap-3 bg-[#FAF8F5]">
+        <div className="w-12 h-12 border-4 border-amber-600/20 border-t-amber-600 rounded-full animate-spin"></div>
+        <p className="text-amber-800/60 font-bold text-xs uppercase tracking-widest animate-pulse">Loading Member Records...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">
@@ -398,9 +462,7 @@ export default function Occupants() {
                         <h4 className="font-bold text-slate-900 leading-tight text-sm">{occ.name}</h4>
                         <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider ${
                           occ.status === 'Active' ? 'bg-green-100 text-green-700 border border-green-200' :
-                          occ.status === 'Left' ? 'bg-slate-100 text-slate-600 border border-slate-200' :
-                          occ.status === 'Blocked' ? 'bg-red-100 text-red-700 border border-red-200' :
-                          'bg-amber-100 text-amber-700 border border-amber-200'
+                          'bg-stone-100 text-stone-600 border border-stone-200'
                         }`}>
                           {occ.status}
                         </span>
@@ -648,12 +710,12 @@ export default function Occupants() {
               </div>
               <div className="bg-slate-50 p-2 rounded-xl text-center">
                 <p className="text-[8px] font-black text-slate-400 uppercase">Paid</p>
-                <p className="text-sm font-black text-emerald-600">₹{selectedOccupant.id === 'occ-3' ? '6,000' : '8,000'}</p>
+                <p className="text-sm font-black text-emerald-600">₹{memberStats.paid.toLocaleString('en-IN')}</p>
               </div>
               <div className="bg-slate-50 p-2 rounded-xl text-center">
                 <p className="text-[8px] font-black text-slate-400 uppercase">Dues</p>
-                <p className={`text-sm font-black ${selectedOccupant.id === 'occ-3' ? 'text-red-600 font-extrabold animate-pulse' : 'text-slate-500'}`}>
-                  ₹{selectedOccupant.id === 'occ-3' ? '2,000' : '0'}
+                <p className={`text-sm font-black ${memberStats.dues > 0 ? 'text-red-600 font-extrabold animate-pulse' : 'text-slate-500'}`}>
+                  ₹{memberStats.dues.toLocaleString('en-IN')}
                 </p>
               </div>
               <div className="bg-slate-50 p-2 rounded-xl text-center">
@@ -722,6 +784,7 @@ export default function Occupants() {
                       cancelLabel: "Cancel"
                     });
                     if (confirmed) {
+                      window.open(`https://wa.me/${selectedOccupant.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Hello ${selectedOccupant.name}, this is a gentle reminder regarding your pending fees of ₹${memberStats.dues} for Manushri Study Hall.`)}`, '_blank');
                       showToast(`Reminder notification sent to ${selectedOccupant.name}`, 'success');
                     }
                   }}
@@ -738,15 +801,35 @@ export default function Occupants() {
 
                 <button 
                   onClick={async () => {
+                    const pendingPayment = payments.find(p => p.occupantId === selectedOccupant.id && (p.status === 'Pending' || p.status === 'Overdue'));
                     const confirmed = await confirm({
                       title: "Mark Payment as Paid?",
-                      description: `This will record a fee payment of ₹2,000 for ${selectedOccupant.name} for the current monthly cycle.`,
+                      description: pendingPayment 
+                        ? `This will record a fee payment of ₹${pendingPayment.amount} for ${selectedOccupant.name} for the month of ${pendingPayment.month}.`
+                        : `This will record a new fee payment of ₹2,000 for ${selectedOccupant.name} for the current month.`,
                       severity: "medium",
                       confirmLabel: "Mark Paid",
                       cancelLabel: "Cancel"
                     });
                     if (confirmed) {
-                      showToast(`Payment of ₹2,000 marked successfully for ${selectedOccupant.name}`, 'success');
+                      try {
+                        if (pendingPayment) {
+                          await updatePayment(pendingPayment.id, { status: 'Paid', paidDate: new Date().toISOString().split('T')[0] });
+                        } else {
+                          await createPayment({
+                            occupantId: selectedOccupant.id,
+                            amount: selectedOccupant.monthlyFee || 2000,
+                            status: 'Paid',
+                            month: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+                            dueDate: new Date().toISOString().split('T')[0],
+                            paidDate: new Date().toISOString().split('T')[0]
+                          });
+                        }
+                        showToast(`Payment marked successfully for ${selectedOccupant.name}`, 'success');
+                      } catch (err) {
+                        console.error(err);
+                        showToast('Failed to record payment.', 'error');
+                      }
                     }
                   }}
                   className="flex items-center gap-3 p-3 bg-emerald-50/50 hover:bg-emerald-100/50 text-emerald-700 hover:text-emerald-800 border border-emerald-100 rounded-2xl text-left transition-all active:scale-95 duration-200 cursor-pointer"
@@ -762,15 +845,33 @@ export default function Occupants() {
 
                 <button 
                   onClick={async () => {
+                    const currentSeat = seats.find(s => s.id === selectedOccupant.seatId);
+                    const availableSeat = seats.find(s => !s.isOccupied);
+                    if (!availableSeat) {
+                      showToast("No vacant seats available for transfer.", "error");
+                      return;
+                    }
                     const confirmed = await confirm({
                       title: "Transfer Member Seat?",
-                      description: `Are you sure you want to trigger a seat transfer for ${selectedOccupant.name}? This will move their occupant allocation to a new seat location.`,
+                      description: `Are you sure you want to move ${selectedOccupant.name} from seat ${currentSeat?.number || 'N/A'} to seat ${availableSeat.number}?`,
                       severity: "high",
                       confirmLabel: "Transfer Seat",
                       cancelLabel: "Cancel"
                     });
                     if (confirmed) {
-                      showToast(`Seat transfer dialog triggered for ${selectedOccupant.name}`, 'success');
+                      try {
+                        if (selectedOccupant.seatId && selectedOccupant.seatId !== 'N/A') {
+                          await updateSeat(selectedOccupant.seatId, { isOccupied: false, occupantId: '' });
+                        }
+                        await updateSeat(availableSeat.id, { isOccupied: true, occupantId: selectedOccupant.id });
+                        await updateOccupant(selectedOccupant.id, { seatId: availableSeat.id });
+                        
+                        setSelectedOccupant((prev: any) => ({ ...prev, seatId: availableSeat.id, seatNumber: availableSeat.number }));
+                        showToast(`Seat transferred to ${availableSeat.number} successfully!`, 'success');
+                      } catch (err) {
+                        console.error(err);
+                        showToast('Failed to transfer seat.', 'error');
+                      }
                     }
                   }}
                   className="flex items-center gap-3 p-3 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200/60 rounded-2xl text-left transition-all active:scale-95 duration-200 cursor-pointer"
@@ -794,7 +895,17 @@ export default function Occupants() {
                       cancelLabel: "Cancel"
                     });
                     if (confirmed) {
-                      showToast(`Vacate request generated for ${selectedOccupant.name}`, 'success');
+                      try {
+                        if (selectedOccupant.seatId && selectedOccupant.seatId !== 'N/A') {
+                          await updateSeat(selectedOccupant.seatId, { isOccupied: false, occupantId: '' });
+                        }
+                        await updateOccupant(selectedOccupant.id, { seatId: 'N/A', status: 'Inactive' });
+                        setSelectedOccupant(null);
+                        showToast(`Vacate request completed. ${selectedOccupant.name} is now marked inactive.`, 'success');
+                      } catch (err) {
+                        console.error(err);
+                        showToast('Failed to vacate occupant.', 'error');
+                      }
                     }
                   }}
                   className="flex items-center gap-3 p-3 bg-rose-50/50 hover:bg-rose-100/50 text-rose-700 hover:text-rose-800 border border-rose-100 rounded-2xl text-left transition-all active:scale-95 duration-200 cursor-pointer"
@@ -810,6 +921,8 @@ export default function Occupants() {
 
                 <button 
                   onClick={async () => {
+                    const today = new Date().toISOString().split('T')[0];
+                    const session = attendanceSessions.find(s => s.date === today);
                     const confirmed = await confirm({
                       title: "Mark Daily Attendance?",
                       description: `This will mark daily attendance check-in for ${selectedOccupant.name} as PRESENT for today's active session.`,
@@ -818,7 +931,20 @@ export default function Occupants() {
                       cancelLabel: "Cancel"
                     });
                     if (confirmed) {
-                      showToast(`Attendance marked successfully for ${selectedOccupant.name}`, 'success');
+                      try {
+                        const records = session?.records ? { ...session.records } : {};
+                        records[selectedOccupant.id] = {
+                          occupantId: selectedOccupant.id,
+                          status: 'Present',
+                          markedAt: new Date().toISOString(),
+                          markedBy: 'Operator'
+                        };
+                        await saveAttendanceSession(today, false, records);
+                        showToast(`Attendance marked successfully for ${selectedOccupant.name}`, 'success');
+                      } catch (err) {
+                        console.error(err);
+                        showToast('Failed to update attendance session.', 'error');
+                      }
                     }
                   }}
                   className="col-span-2 flex items-center justify-center gap-2.5 p-3.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-black text-xs transition-all active:scale-95 shadow-md shadow-indigo-500/10 duration-200 cursor-pointer"
@@ -857,21 +983,24 @@ export default function Occupants() {
                 <button className="text-[10px] font-black text-indigo-600 uppercase hover:underline">See All</button>
               </div>
               <div className="space-y-2">
-                {[
-                  { month: 'May 2026', amount: 2000, status: 'Paid', date: '01 May' },
-                  { month: 'April 2026', amount: 2000, status: 'Paid', date: '02 Apr' }
-                ].map((p, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
-                    <div className="flex items-center gap-3">
-                      <CreditCard size={18} className="text-slate-400" />
-                      <div>
-                        <p className="text-sm font-bold text-slate-900">{p.month}</p>
-                        <p className="text-[10px] font-medium text-slate-500">Paid on {p.date}</p>
+                {memberPaymentsList.length > 0 ? (
+                  memberPaymentsList.map((p, i) => (
+                    <div key={i} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl">
+                      <div className="flex items-center gap-3">
+                        <CreditCard size={18} className="text-slate-400" />
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{p.month}</p>
+                          <p className="text-[10px] font-medium text-slate-500">
+                            {p.status === 'Paid' ? `Paid on ${p.paidDate || p.updatedAt.split('T')[0]}` : `Due on ${p.dueDate}`}
+                          </p>
+                        </div>
                       </div>
+                      <span className="text-sm font-black text-slate-900">₹{p.amount}</span>
                     </div>
-                    <span className="text-sm font-black text-slate-900">₹{p.amount}</span>
-                  </div>
-                ))}
+                  ))
+                ) : (
+                  <p className="text-xs text-slate-400 text-center py-2 font-medium">No billing history found.</p>
+                )}
               </div>
             </div>
             
@@ -890,6 +1019,17 @@ export default function Occupants() {
                     <p className="text-[10px] font-medium text-slate-400">{selectedOccupant.joinDate}</p>
                   </div>
                 </div>
+                {selectedOccupant.notes && (
+                  <div className="flex gap-4 mt-3 pt-3 border-t border-slate-100">
+                    <div className="flex flex-col items-center">
+                      <div className="w-2 h-2 rounded-full bg-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-900">{selectedOccupant.notes}</p>
+                      <p className="text-[10px] font-medium text-slate-400">Added during onboarding</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

@@ -1,13 +1,29 @@
+import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Armchair, Mail, Lock, User, Building, ChevronRight } from 'lucide-react';
+import { Armchair, Mail, Lock, User, Building, ChevronRight, Loader2 } from 'lucide-react';
+import { useAuth } from '../features/auth/AuthContext';
 
 export default function Signup() {
   const navigate = useNavigate();
+  const { signup } = useAuth();
+  const [fullName, setFullName] = useState('');
+  const [hallName, setHallName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  const handleSignup = (e: React.FormEvent) => {
+  const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
-    // In a real app, logic would go here
-    navigate('/');
+    if (loading) return;
+    setLoading(true);
+    try {
+      await signup(email, password, hallName);
+      navigate('/');
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -32,6 +48,8 @@ export default function Signup() {
                 <input 
                   type="text" 
                   required
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
                   placeholder="John Doe"
                   className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-sm transition-all"
                 />
@@ -45,6 +63,8 @@ export default function Signup() {
                 <input 
                   type="text" 
                   required
+                  value={hallName}
+                  onChange={(e) => setHallName(e.target.value)}
                   placeholder="Manushri Study Hall"
                   className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-sm transition-all"
                 />
@@ -58,6 +78,8 @@ export default function Signup() {
                 <input 
                   type="email" 
                   required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                   placeholder="owner@hall.com"
                   className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-sm transition-all"
                 />
@@ -71,6 +93,8 @@ export default function Signup() {
                 <input 
                   type="password" 
                   required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   className="w-full pl-12 pr-4 py-3.5 bg-slate-50 border-0 rounded-2xl focus:ring-2 focus:ring-indigo-500 outline-none font-bold text-sm transition-all"
                 />
@@ -79,10 +103,22 @@ export default function Signup() {
 
             <button 
               type="submit"
-              className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-500/25 flex items-center justify-center gap-2 group active:scale-95 transition-all mt-4"
+              disabled={loading}
+              className={`w-full py-4 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-500/25 flex items-center justify-center gap-2 group active:scale-95 transition-all mt-4 ${
+                loading ? 'opacity-80 cursor-not-allowed' : ''
+              }`}
             >
-              Launch Dashboard
-              <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+              {loading ? (
+                <>
+                  <Loader2 size={18} className="animate-spin" />
+                  Launching...
+                </>
+              ) : (
+                <>
+                  Launch Dashboard
+                  <ChevronRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                </>
+              )}
             </button>
           </form>
 

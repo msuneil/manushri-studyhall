@@ -6,8 +6,9 @@ import {
   Settings,
   LogOut,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { Modal } from "./Modal";
+import { useAuth } from "../features/auth/AuthContext";
 
 interface MoreDrawerProps {
   isOpen: boolean;
@@ -15,6 +16,18 @@ interface MoreDrawerProps {
 }
 
 export function MoreDrawer({ isOpen, onClose }: MoreDrawerProps) {
+  const navigate = useNavigate();
+  const { logout } = useAuth();
+
+  const handleLogout = async () => {
+    try {
+      onClose();
+      await logout();
+      navigate('/login');
+    } catch (err) {
+      console.error(err);
+    }
+  };
   const menuItems = [
     { icon: Users, label: "Occupants", path: "/occupants" },
     { icon: TrendingDown, label: "Expenses", path: "/expenses" },
@@ -49,7 +62,10 @@ export function MoreDrawer({ isOpen, onClose }: MoreDrawerProps) {
           </NavLink>
         ))}
 
-        <button className="flex flex-col items-center gap-3 p-4 rounded-2xl border border-red-50 bg-red-50/30 text-red-600 col-span-2 mt-2">
+        <button 
+          onClick={handleLogout}
+          className="flex flex-col items-center gap-3 p-4 rounded-2xl border border-red-50 bg-red-50/30 text-red-600 col-span-2 mt-2 cursor-pointer active:scale-98 transition-all"
+        >
           <div className="p-3 bg-red-100 rounded-xl">
             <LogOut size={24} />
           </div>

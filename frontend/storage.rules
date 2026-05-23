@@ -1,0 +1,15 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper check
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // Scoped storage rule matching the owner UID path prefix
+    match /halls/{hallId}/{allPaths=**} {
+      allow read, write: if isAuthenticated() && request.auth.uid == hallId;
+    }
+  }
+}

@@ -7,21 +7,49 @@ import { SeatFilters } from './components/SeatFilters';
 import { SeatDetailsSheet } from './sheets/SeatDetailsSheet';
 import { AssignSeatSheet } from './sheets/AssignSeatSheet';
 import { NewOccupantSheet } from './sheets/NewOccupantSheet';
-
-import { mockRooms } from '../rooms/mock/roomsData';
-import { isAllocationBlocked } from '../rooms/types';
-import { mockSeats, mockOccupants, mockActivityTimeline } from './mock/seatsData';
+import { useConfirmation } from '../../components/Confirmation';
+import { useData } from '../../contexts/DataContext';
 import type { Seat, Occupant, ActivityEvent } from './types';
 
-import { useConfirmation } from '../../components/Confirmation';
+const isAllocationBlocked = (status: string): boolean => {
+  return status === 'Maintenance' || status === 'Inactive';
+};
 
 export function SeatsView() {
   const location = useLocation();
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
 
-  // Rooms list
-  const rooms = mockRooms;
+  // Connect to live repository subscriptions orchestrator
+  const { 
+    rooms: dbRooms, 
+    seats: dbSeats, 
+    occupants: dbOccupants, 
+    payments,
+    attendanceSessions,
+    updateSeat, 
+    updateOccupant, 
+    createOccupant, 
+    saveAttendanceSession,
+    loading 
+  } = useData();
+
+  // Enriched rooms computed from DB
+  const rooms = useMemo(() => {
+    return dbRooms.map(room => {
+      const isAC = room.type.toLowerCase().includes('ac') && !room.type.toLowerCase().includes('non-ac');
+      const status = (room as any).status || 'Active';
+      const seatPrefix = (room as any).seatPrefix || (isAC ? 'AC' : 'NAC');
+      
+      return {
+        id: room.id,
+        name: room.name,
+        type: room.type,
+        status,
+        seatPrefix,
+      };
+    });
+  }, [dbRooms]);
 
   // Pre-filter room if navigated with state context (from RoomCard click)
   const initialRoomId = useMemo(() => {
@@ -36,6 +64,13 @@ export function SeatsView() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
   const [roomTypeFilter, setRoomTypeFilter] = useState<'All' | 'AC' | 'Non-AC' | 'Premium'>('All');
+
+  // Sync selectedRoomId if the list updates and selectedRoomId is empty
+  useEffect(() => {
+    if (rooms.length > 0 && !selectedRoomId) {
+      setSelectedRoomId(rooms[0].id);
+    }
+  }, [rooms, selectedRoomId]);
 
   // Filter rooms based on type for scalable room navigation
   const filteredRooms = useMemo(() => {
@@ -59,10 +94,43 @@ export function SeatsView() {
     }
   }, [filteredRooms, selectedRoomId]);
 
-  // Seats & Occupants state
-  const [seats, setSeats] = useState<Seat[]>(mockSeats);
-  const [occupants, setOccupants] = useState<Occupant[]>(mockOccupants);
-  const [timelineEvents, setTimelineEvents] = useState<Record<string, ActivityEvent[]>>(mockActivityTimeline);
+  // Enriched active occupants with dynamic billing/attendance details
+  const occupants = useMemo(() => {
+    return dbOccupants.map(o => {
+      const occPayments = payments.filter(p => p.occupantId === o.id);
+      const activeMonthPayment = occPayments.find(p => p.month === 'May 2026');
+      
+      const paymentStatus = activeMonthPayment ? (activeMonthPayment.status as any) : 'Pending';
+      const lastPaymentDate = occPayments.filter(p => p.status === 'Paid')[0]?.paidDate || 'N/A';
+
+      const occSessions = attendanceSessions.filter(s => s.records[o.id]?.status === 'Present');
+      const lastAttendanceDate = occSessions[0]?.date || 'N/A';
+
+      return {
+        ...o,
+        paymentStatus: paymentStatus === 'Paid' ? 'Paid' : paymentStatus === 'Overdue' ? 'Overdue' : 'Pending',
+        lastPaymentDate,
+        lastAttendanceDate,
+        attendanceTrend: 'Stable' as const
+      } as Occupant;
+    });
+  }, [dbOccupants, payments, attendanceSessions]);
+
+  // Map database seats to types
+  const seats = useMemo(() => {
+    return dbSeats.map(s => ({
+      id: s.id,
+      number: s.number,
+      roomId: s.roomId,
+      isOccupied: s.isOccupied,
+      isOverdue: s.isOverdue,
+      isReserved: s.isReserved,
+      occupantId: s.occupantId
+    } as Seat));
+  }, [dbSeats]);
+
+  // Interactive local activity events for session timeline
+  const [timelineEvents, setTimelineEvents] = useState<Record<string, ActivityEvent[]>>({});
 
   // Active sheets overlays
   const [selectedSeat, setSelectedSeat] = useState<Seat | null>(null);
@@ -95,11 +163,11 @@ export function SeatsView() {
     } else if (activeFilter === 'overdue') {
       list = list.filter(s => s.isOverdue);
     } else if (activeFilter === 'blocked') {
-      // Inactive or Maintenance blocked seats
       list = list.filter(() => isRoomBlocked);
     }
 
-    return list;
+    // Sort seats numerically/alphabetically
+    return list.sort((a, b) => a.number.localeCompare(b.number, undefined, { numeric: true }));
   }, [seats, selectedRoomId, searchQuery, activeFilter, isRoomBlocked]);
 
   // Statistics calculation
@@ -121,7 +189,6 @@ export function SeatsView() {
       setIsDetailsOpen(true);
     } else {
       if (isRoomBlocked) {
-        // Tapping vacant seat in a blocked room shows informative alert instead of assign
         showToast(`Cannot allocate seat. ${currentRoom.name} is in ${currentRoomStatus} state.`, 'error');
       } else {
         setIsAssignOpen(true);
@@ -158,40 +225,42 @@ export function SeatsView() {
 
     if (!confirmed) return;
 
-    setSeats(prev => prev.map(s => s.id === selectedSeat.id ? { 
-      ...s, 
-      isOccupied: true, 
-      occupantId 
-    } : s));
+    try {
+      await updateSeat(selectedSeat.id, { 
+        isOccupied: true, 
+        occupantId 
+      });
 
-    // Update occupant seat mapping
-    setOccupants(prev => prev.map(o => o.id === occupantId ? {
-      ...o,
-      planType: data.plan,
-      joinDate: data.joinDate,
-      notes: data.notes || o.notes
-    } : o));
+      await updateOccupant(occupantId, {
+        seatId: selectedSeat.id,
+        planType: data.plan,
+        joinDate: data.joinDate,
+        notes: data.notes || ''
+      });
 
-    // Append check-in log to activity timeline
-    const checkInEvent: ActivityEvent = {
-      id: `ev_${Date.now()}`,
-      title: `Assigned seat ${selectedSeat.number}`,
-      timestamp: 'Just Now',
-      type: 'System',
-      details: `Plan: ${data.plan}. Joined: ${data.joinDate}.`
-    };
+      const checkInEvent: ActivityEvent = {
+        id: `ev_${Date.now()}`,
+        title: `Assigned seat ${selectedSeat.number}`,
+        timestamp: 'Just Now',
+        type: 'System',
+        details: `Plan: ${data.plan}. Joined: ${data.joinDate}.`
+      };
 
-    setTimelineEvents(prev => ({
-      ...prev,
-      [occupantId]: [checkInEvent, ...(prev[occupantId] || [])]
-    }));
+      setTimelineEvents(prev => ({
+        ...prev,
+        [occupantId]: [checkInEvent, ...(prev[occupantId] || [])]
+      }));
 
-    showToast(`Seat ${selectedSeat.number} successfully assigned!`, 'success');
-    setIsAssignOpen(false);
-    setSelectedSeat(null);
+      showToast(`Seat ${selectedSeat.number} successfully assigned!`, 'success');
+      setIsAssignOpen(false);
+      setSelectedSeat(null);
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to assign seat.', 'error');
+    }
   };
 
-  const handleAddNewOccupant = async (newOccupant: Occupant) => {
+  const handleAddNewOccupant = async (newOccupant: any) => {
     const confirmed = await confirm({
       title: "Register New Member?",
       description: `Are you sure you want to create a new profile for ${newOccupant.name}?`,
@@ -202,9 +271,28 @@ export function SeatsView() {
 
     if (!confirmed) return;
 
-    setOccupants(prev => [newOccupant, ...prev]);
-    showToast(`Profile for ${newOccupant.name} created!`, 'success');
-    setIsNewOccupantOpen(false);
+    try {
+      const occupantData = {
+        name: newOccupant.name,
+        seatId: '', 
+        phone: newOccupant.phone,
+        email: newOccupant.email || '',
+        joinDate: newOccupant.joinDate || new Date().toISOString().split('T')[0],
+        status: 'Active' as const,
+        attendanceRate: 100,
+        monthlyFee: newOccupant.monthlyFee ? parseInt(newOccupant.monthlyFee, 10) : 2000,
+        planType: newOccupant.planType || 'Full Day',
+        emergencyContact: newOccupant.emergencyContact || '',
+        notes: newOccupant.notes || ''
+      };
+
+      await createOccupant(occupantData);
+      showToast(`Profile for ${newOccupant.name} created!`, 'success');
+      setIsNewOccupantOpen(false);
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to register member.', 'error');
+    }
   };
 
   const handleVacateSeat = async (seatId: string) => {
@@ -215,59 +303,48 @@ export function SeatsView() {
     const occ = occupants.find(o => o.id === occId);
     const occName = occ ? occ.name : 'the occupant';
 
-    let shouldTriggerToast = false;
-    let attempts = 0;
-
     const confirmed = await confirm({
       title: "Vacate Seat?",
       description: `Are you sure you want to vacate Seat ${seatToVacate.number}? This will immediately release the seat from ${occName} and make it vacant.`,
       severity: "destructive",
       confirmLabel: "Vacate Seat",
-      cancelLabel: "Cancel",
-      checkConflict: async () => {
-        // Pre-validate stale state checking
-        const currentSeat = seats.find(s => s.id === seatId);
-        return !currentSeat || !currentSeat.isOccupied;
-      },
-      onConfirm: async () => {
-        // Simulate network latency
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Simulate a retryable Firebase/Technical error on attempt #1 to demonstrate sanitization
-        attempts += 1;
-        if (attempts === 1) {
-          throw new Error("FirebaseError: [auth/permission-denied] The user does not have permission to execute this operation.");
-        }
-
-        setSeats(prev => prev.map(s => s.id === seatId ? { 
-          ...s, 
-          isOccupied: false, 
-          isOverdue: false, 
-          occupantId: undefined 
-        } : s));
-
-        if (occId) {
-          // Archive allocation event in occupant activity history
-          const archiveEvent: ActivityEvent = {
-            id: `ev_${Date.now()}`,
-            title: `Vacated seat ${seatToVacate.number}`,
-            timestamp: 'Just Now',
-            type: 'System',
-            details: 'Seat cleared. History preserved for safety.'
-          };
-
-          setTimelineEvents(prev => ({
-            ...prev,
-            [occId]: [archiveEvent, ...(prev[occId] || [])]
-          }));
-        }
-
-        shouldTriggerToast = true;
-      }
+      cancelLabel: "Cancel"
     });
 
-    if (confirmed && shouldTriggerToast) {
+    if (!confirmed) return;
+
+    try {
+      await updateSeat(seatId, { 
+        isOccupied: false, 
+        isOverdue: false, 
+        occupantId: ''
+      });
+
+      if (occId) {
+        await updateOccupant(occId, {
+          seatId: ''
+        });
+
+        const archiveEvent: ActivityEvent = {
+          id: `ev_${Date.now()}`,
+          title: `Vacated seat ${seatToVacate.number}`,
+          timestamp: 'Just Now',
+          type: 'System',
+          details: 'Seat cleared. History preserved for safety.'
+        };
+
+        setTimelineEvents(prev => ({
+          ...prev,
+          [occId]: [archiveEvent, ...(prev[occId] || [])]
+        }));
+      }
+
       showToast(`Seat ${seatToVacate.number} is now Vacant`, 'success');
+      setIsDetailsOpen(false);
+      setSelectedSeat(null);
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to vacate seat.', 'error');
     }
   };
 
@@ -285,28 +362,41 @@ export function SeatsView() {
 
     if (!confirmed) return;
 
-    const todayStr = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    try {
+      const todayDateStr = new Date().toISOString().split('T')[0];
+      const todaysSession = attendanceSessions.find(s => s.date === todayDateStr);
+      const currentRecords = todaysSession ? todaysSession.records : {};
+      
+      const updatedRecords = {
+        ...currentRecords,
+        [occupantId]: {
+          occupantId,
+          status: 'Present' as any,
+          markedAt: new Date().toISOString(),
+          markedBy: 'Operator'
+        }
+      };
 
-    // Append attendance log
-    const event: ActivityEvent = {
-      id: `ev_${Date.now()}`,
-      title: 'Attendance marked: PRESENT',
-      timestamp: 'Just Now',
-      type: 'Attendance',
-      details: `Check-in recorded: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
-    };
+      await saveAttendanceSession(todayDateStr, todaysSession?.isSubmitted || false, updatedRecords);
 
-    setTimelineEvents(prev => ({
-      ...prev,
-      [occupantId]: [event, ...(prev[occupantId] || [])]
-    }));
+      const event: ActivityEvent = {
+        id: `ev_${Date.now()}`,
+        title: 'Attendance marked: PRESENT',
+        timestamp: 'Just Now',
+        type: 'Attendance',
+        details: `Check-in recorded: ${new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`
+      };
 
-    setOccupants(prev => prev.map(o => o.id === occupantId ? {
-      ...o,
-      lastAttendanceDate: todayStr
-    } : o));
+      setTimelineEvents(prev => ({
+        ...prev,
+        [occupantId]: [event, ...(prev[occupantId] || [])]
+      }));
 
-    showToast(`Attendance marked successfully for ${target.name}`, 'success');
+      showToast(`Attendance marked successfully for ${target.name}`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to record attendance.', 'error');
+    }
   };
 
   const handleSendReminder = async (occupantId: string) => {
@@ -323,6 +413,20 @@ export function SeatsView() {
 
     if (!confirmed) return;
 
+    // Find if there is an overdue payment
+    const occPayments = payments.filter(p => p.occupantId === occupantId && p.status === 'Overdue');
+    const activePayment = occPayments[0] || payments.find(p => p.occupantId === occupantId);
+    
+    if (activePayment) {
+      const seat = seats.find(s => s.id === target.seatId);
+      const reminderText = `Hi ${target.name}, this is a reminder for your study hall seat ${seat?.number || 'N/A'} for the month of ${activePayment.month}. Pending dues: ₹${activePayment.amount}. Please clear at your earliest convenience.`;
+      
+      let phone = target.phone || '';
+      phone = phone.replace(/[^0-9]/g, '');
+      if (phone.length === 10) phone = `91${phone}`;
+      window.open(`https://wa.me/${phone}?text=${encodeURIComponent(reminderText)}`, '_blank');
+    }
+
     const event: ActivityEvent = {
       id: `ev_${Date.now()}`,
       title: 'Payment reminder warning sent via WhatsApp',
@@ -336,13 +440,27 @@ export function SeatsView() {
       [occupantId]: [event, ...(prev[occupantId] || [])]
     }));
 
-    showToast(`WhatsApp reminder dispatched to ${target.name}!`, 'success');
+    showToast(`WhatsApp reminder opened for ${target.name}!`, 'success');
   };
 
-  const handleUpdateNotes = (occupantId: string, notes: string) => {
-    setOccupants(prev => prev.map(o => o.id === occupantId ? { ...o, notes } : o));
-    showToast('Operational notes updated', 'success');
+  const handleUpdateNotes = async (occupantId: string, notes: string) => {
+    try {
+      await updateOccupant(occupantId, { notes });
+      showToast('Operational notes updated', 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to update notes.', 'error');
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-[#FAF8F5] space-y-4">
+        <div className="w-10 h-10 border-3 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-amber-800/60 font-serif text-sm tracking-wide">Orchestrating seat map...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">

@@ -19,12 +19,11 @@ import {
   FileText,
   Settings,
   Coins,
-  Share2,
   Copy,
   Printer,
   Mail
 } from 'lucide-react';
-import { payments, occupants, seats } from '../data/mockData';
+import { useData } from '../contexts/DataContext';
 
 export default function Payments() {
   const { showToast } = useToast();
@@ -44,32 +43,76 @@ export default function Payments() {
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
 
-  // 1. Dynamic local interactive state list
-  const [paymentList, setPaymentList] = useState(payments);
+  const { payments, occupants, seats, updatePayment, loading } = useData();
 
-  // 1b. Structured Historical Operational Notes
-  const [paymentNotes, setPaymentNotes] = useState<Record<string, any[]>>({
-    'pay-1': [
-      { id: 'note-1', content: 'Promised payment by 20 May', timestamp: '18 May · 11:15 AM', createdBy: 'Admin' }
-    ]
-  });
+  // Filter active occupants only
+  const activeOccupants = useMemo(() => {
+    return occupants.filter(o => o.isActive && o.status === 'Active');
+  }, [occupants]);
 
+  // Derived note state mapped from live Firestore Payment.notes field
+  const paymentNotes = useMemo(() => {
+    const notesMap: Record<string, any[]> = {};
+    payments.forEach(p => {
+      if (p.notes) {
+        notesMap[p.id] = [
+          {
+            id: `note_${p.id}`,
+            content: p.notes,
+            timestamp: p.updatedAt 
+              ? new Date(p.updatedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+              : 'Recently',
+            createdBy: 'Admin'
+          }
+        ];
+      } else {
+        notesMap[p.id] = [];
+      }
+    });
+    return notesMap;
+  }, [payments]);
 
-  // 2. Timeline Activity Event States supporting payment, reminder, success, warning, adjustment, note
-  const [paymentActivities, setPaymentActivities] = useState<Record<string, any[]>>({
-    'pay-1': [
-      { id: 'act-1', title: 'Paid Confirmation sent', timestamp: '01 May, 11:20 AM', type: 'success' },
-      { id: 'act-2', title: 'Due reminder sent', timestamp: '28 April, 09:15 AM', type: 'reminder' }
-    ],
-    'pay-2': [
-      { id: 'act-3', title: 'Manual fee adjustment applied', timestamp: '12 May, 04:30 PM', type: 'adjustment' },
-      { id: 'act-4', title: 'WhatsApp Payment Reminder sent', timestamp: '10 May, 02:15 PM', type: 'reminder' }
-    ]
-  });
+  // Derived interactive activities log
+  const [localActivities, setLocalActivities] = useState<Record<string, any[]>>({});
+
+  const paymentActivities = useMemo(() => {
+    const activitiesMap: Record<string, any[]> = {};
+    payments.forEach(p => {
+      const liveAct = localActivities[p.id] || [];
+      const defaultActs: any[] = [];
+      
+      // Auto-insert a note activity if there is a note in the payment document
+      if (p.notes) {
+        defaultActs.push({
+          id: `act_note_${p.id}`,
+          title: 'Note added',
+          timestamp: p.updatedAt 
+            ? new Date(p.updatedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+            : 'Recently',
+          type: 'note',
+          relatedNoteId: `note_${p.id}`
+        });
+      }
+      
+      if (p.status === 'Paid') {
+        defaultActs.push({
+          id: `act_paid_${p.id}`,
+          title: 'Paid Confirmation',
+          timestamp: p.paidDate 
+            ? new Date(p.paidDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+            : 'Recently',
+          type: 'success'
+        });
+      }
+      
+      activitiesMap[p.id] = [...liveAct, ...defaultActs];
+    });
+    return activitiesMap;
+  }, [payments, localActivities]);
 
   const enrichedPayments = useMemo(() => {
-    return paymentList.map(payment => {
-      const occupant = occupants.find(o => o.id === payment.occupantId);
+    return payments.map(payment => {
+      const occupant = activeOccupants.find(o => o.id === payment.occupantId);
       const seat = seats.find(s => s.id === occupant?.seatId);
       return {
         ...payment,
@@ -84,7 +127,7 @@ export default function Payments() {
       const matchesStatus = filterStatus === 'All' || p.status === filterStatus;
       return matchesSearch && matchesStatus;
     });
-  }, [paymentList, searchQuery, filterStatus]);
+  }, [payments, activeOccupants, seats, searchQuery, filterStatus]);
 
   const stats = useMemo(() => {
     const totalCollected = enrichedPayments.filter(p => p.status === 'Paid').reduce((sum, p) => sum + p.amount, 0);
@@ -131,15 +174,13 @@ export default function Payments() {
   };
 
   const handleUpdateStatus = async (paymentId: string, status: string) => {
-    const p = paymentList.find(x => x.id === paymentId);
+    const p = payments.find(x => x.id === paymentId);
     if (!p) return;
 
-    const occupant = occupants.find(o => o.id === p.occupantId);
+    const occupant = activeOccupants.find(o => o.id === p.occupantId);
     const occupantName = occupant ? occupant.name : 'this member';
     const isPaid = status === 'Paid';
-
     const isPending = status === 'Pending';
-    let shouldTriggerToast = false;
 
     const confirmed = await confirm({
       title: isPaid ? "Mark Payment as Paid?" : isPending ? "Remove Overdue Status?" : "Mark Balance as Overdue?",
@@ -150,114 +191,104 @@ export default function Payments() {
         : `Are you sure you want to change the status of ${occupantName}'s payment to ${status}?`,
       severity: isPaid ? "medium" : "high",
       confirmLabel: isPaid ? "Confirm Payment" : isPending ? "Remove Overdue" : "Change Status",
-      cancelLabel: "Cancel",
-      onConfirm: async () => {
-        // Simulate network delay
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // State update inside onConfirm to prevent duplicate submissions
-        setPaymentList(prev => prev.map(item => item.id === paymentId ? {
-          ...item,
-          status: status as 'Paid' | 'Pending' | 'Overdue',
-          paidDate: isPaid ? new Date().toISOString().split('T')[0] : undefined
-        } : item));
-
-        // Add history activity log
-        const timestamp = new Date().toLocaleDateString('en-IN', {
-          day: '2-digit',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-
-        const newActivity = {
-          id: `act_${Date.now()}`,
-          title: `Status changed to ${status}`,
-          timestamp,
-          type: isPaid ? 'success' : 'warning'
-        };
-
-        setPaymentActivities(prev => ({
-          ...prev,
-          [paymentId]: [newActivity, ...(prev[paymentId] || [])]
-        }));
-
-        // Dynamically update active view modal state
-        setSelectedPayment({ 
-          ...selectedPayment, 
-          status,
-          paidDate: isPaid ? new Date().toISOString().split('T')[0] : undefined
-        });
-
-        shouldTriggerToast = true;
-      }
+      cancelLabel: "Cancel"
     });
 
-    if (confirmed && shouldTriggerToast) {
+    if (!confirmed) return;
+
+    try {
+      await updatePayment(paymentId, {
+        status: status as any,
+        paidDate: isPaid ? new Date().toISOString().split('T')[0] : undefined
+      });
+
+      // Add a local activity log
+      const timestamp = new Date().toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      const newActivity = {
+        id: `act_${Date.now()}`,
+        title: `Status changed to ${status}`,
+        timestamp,
+        type: isPaid ? 'success' : 'warning'
+      };
+
+      setLocalActivities(prev => ({
+        ...prev,
+        [paymentId]: [newActivity, ...(prev[paymentId] || [])]
+      }));
+
+      // Update selectedPayment context if active
+      if (selectedPayment && selectedPayment.id === paymentId) {
+        setSelectedPayment((prev: any) => ({
+          ...prev,
+          status,
+          paidDate: isPaid ? new Date().toISOString().split('T')[0] : undefined
+        }));
+      }
+
       showToast(`Payment successfully marked as ${status}!`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to update payment status.", "error");
     }
   };
 
   const handleSendReminder = async (p: any) => {
-    let shouldTriggerToast = false;
-
     const confirmed = await confirm({
       title: "Send Fee Reminder?",
       description: `This will draft and dispatch a WhatsApp payment reminder message to ${p.occupantName} for the pending amount of ₹${p.amount.toLocaleString()}.`,
       severity: "low",
       confirmLabel: "Send Reminder",
-      cancelLabel: "Cancel",
-      onConfirm: async () => {
-        // Simulate sending latency
-        await new Promise(resolve => setTimeout(resolve, 500));
-
-        const timestamp = new Date().toLocaleDateString('en-IN', {
-          day: '2-digit',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit'
-        });
-
-        const reminderText = `*MANUSHRI STUDY HALL - FEE REMINDER* 🎓\n` +
-          `-----------------------------------------\n` +
-          `👤 *Occupant:* ${p.occupantName}\n` +
-          `💺 *Seat Number:* ${p.seatNumber}\n` +
-          `📅 *Month:* ${p.month}\n` +
-          `💰 *Pending Amount:* ₹${p.amount.toLocaleString()}\n` +
-          `🗓️ *Due Date:* ${p.dueDate}\n` +
-          `⚠️ *Status:* ${p.status.toUpperCase()}\n` +
-          `-----------------------------------------\n` +
-          `Please settle your dues at the earliest. Thank you! 🙏`;
-
-        const newActivity = {
-          id: `act_${Date.now()}`,
-          title: 'WhatsApp Payment Reminder sent',
-          timestamp,
-          type: 'reminder',
-          message: reminderText,
-          recipientName: p.occupantName,
-          recipientPhone: p.phone || ''
-        };
-
-        setPaymentActivities(prev => ({
-          ...prev,
-          [p.id]: [newActivity, ...(prev[p.id] || [])]
-        }));
-
-        // Launch WhatsApp wa.me redirect in new tab
-        let phone = p.phone || '';
-        phone = phone.replace(/[^0-9]/g, '');
-        if (phone.length === 10) phone = `91${phone}`;
-        const url = `https://wa.me/${phone}?text=${encodeURIComponent(reminderText)}`;
-        window.open(url, '_blank');
-
-        shouldTriggerToast = true;
-      }
+      cancelLabel: "Cancel"
     });
 
-    if (confirmed && shouldTriggerToast) {
-      showToast(`WhatsApp reminder dispatched to ${p.occupantName}!`, 'success');
-    }
+    if (!confirmed) return;
+
+    const timestamp = new Date().toLocaleDateString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const reminderText = `*MANUSHRI STUDY HALL - FEE REMINDER* 🎓\n` +
+      `-----------------------------------------\n` +
+      `👤 *Occupant:* ${p.occupantName}\n` +
+      `💺 *Seat Number:* ${p.seatNumber}\n` +
+      `📅 *Month:* ${p.month}\n` +
+      `💰 *Pending Amount:* ₹${p.amount.toLocaleString()}\n` +
+      `🗓️ *Due Date:* ${p.dueDate}\n` +
+      `⚠️ *Status:* ${p.status.toUpperCase()}\n` +
+      `-----------------------------------------\n` +
+      `Please settle your dues at the earliest. Thank you! 🙏`;
+
+    const newActivity = {
+      id: `act_${Date.now()}`,
+      title: 'WhatsApp Payment Reminder sent',
+      timestamp,
+      type: 'reminder',
+      message: reminderText,
+      recipientName: p.occupantName,
+      recipientPhone: p.phone || ''
+    };
+
+    setLocalActivities(prev => ({
+      ...prev,
+      [p.id]: [newActivity, ...(prev[p.id] || [])]
+    }));
+
+    // Launch WhatsApp wa.me redirect in new tab
+    let phone = p.phone || '';
+    phone = phone.replace(/[^0-9]/g, '');
+    if (phone.length === 10) phone = `91${phone}`;
+    const url = `https://wa.me/${phone}?text=${encodeURIComponent(reminderText)}`;
+    window.open(url, '_blank');
+    showToast(`WhatsApp reminder dispatched to ${p.occupantName}!`, 'success');
   };
 
   const handleActivityTap = (activity: any) => {
@@ -335,7 +366,6 @@ export default function Payments() {
     showToast("Email receipt delivery is planned for the next release.", "info");
   };
 
-  // Immediate operational export - no confirmation layer for high-speed workflows
   const handleExport = (format: string) => {
     setIsExportSheetOpen(false);
     showToast(`Generating and downloading ${format} report...`, "info");
@@ -344,92 +374,60 @@ export default function Payments() {
     }, 1500);
   };
 
-  // Save payment notes with metadata, optimistic states, and rollbacks
   const handleSaveNote = async () => {
     if (!selectedPayment || !noteText.trim()) return;
 
     setIsNoteSheetOpen(false);
 
-    const timestamp = new Date().toLocaleDateString('en-IN', {
-      day: '2-digit',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-
-    const isEditing = !!editingNoteId;
-    const targetNoteId = isEditing ? editingNoteId : `note_${Date.now()}`;
-
-    // 1. Snapshot old state for rollback safety
-    const oldActivities = paymentActivities[selectedPayment.id] || [];
-    const oldNotes = paymentNotes[selectedPayment.id] || [];
-
-    // 2. Perform Optimistic state update
-    let updatedNotes;
-    if (isEditing) {
-      updatedNotes = oldNotes.map(n => 
-        n.id === targetNoteId 
-          ? { ...n, content: noteText, editedAt: new Date().toISOString() } 
-          : n
-      );
-    } else {
-      const newNote = {
-        id: targetNoteId,
-        content: noteText,
-        timestamp,
-        createdBy: 'Admin'
-      };
-      updatedNotes = [newNote, ...oldNotes];
-    }
-
-    setPaymentNotes(prev => ({
-      ...prev,
-      [selectedPayment.id]: updatedNotes
-    }));
-
-    // Only create timeline activity if this is the first note creation
-    let updatedActivities = oldActivities;
-    if (!isEditing && oldNotes.length === 0) {
-      const newActivity = {
-        id: `act_${Date.now()}`,
-        title: 'Note added',
-        timestamp,
-        type: 'note',
-        relatedNoteId: targetNoteId
-      };
-      updatedActivities = [newActivity, ...oldActivities];
-      setPaymentActivities(prev => ({
-        ...prev,
-        [selectedPayment.id]: updatedActivities
-      }));
-    }
-
     const confirmed = await confirm({
-      title: isEditing ? "Update Payment Note?" : "Save Payment Note?",
-      description: isEditing ? "Do you want to update this note in the operational history?" : "Do you want to save this note to the operational history?",
+      title: editingNoteId ? "Update Payment Note?" : "Save Payment Note?",
+      description: editingNoteId ? "Do you want to update this note in the operational history?" : "Do you want to save this note to the operational history?",
       severity: "low",
-      confirmLabel: isEditing ? "Update Note" : "Save Note",
+      confirmLabel: editingNoteId ? "Update Note" : "Save Note",
       cancelLabel: "Cancel"
     });
 
     if (!confirmed) {
-      // 3. Rollback on Cancel
-      setPaymentNotes(prev => ({
-        ...prev,
-        [selectedPayment.id]: oldNotes
-      }));
-      setPaymentActivities(prev => ({
-        ...prev,
-        [selectedPayment.id]: oldActivities
-      }));
       setIsNoteSheetOpen(true);
       return;
     }
 
-    setNoteText('');
-    setEditingNoteId(null);
-    showToast(isEditing ? "Payment note updated successfully!" : "Payment note saved successfully!", "success");
+    try {
+      await updatePayment(selectedPayment.id, {
+        notes: noteText
+      });
+
+      // Update selectedPayment context notes so modal updates immediately
+      setSelectedPayment((prev: any) => ({
+        ...prev,
+        notes: noteText
+      }));
+
+      setNoteText('');
+      setEditingNoteId(null);
+      showToast(editingNoteId ? "Payment note updated successfully!" : "Payment note saved successfully!", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to save note.", "error");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex flex-col min-h-screen bg-[#FAF8F5]">
+        <Header 
+          title="Payments" 
+          subtitle="Fee Tracking & Dues"
+          showBack
+          action={undefined}
+        />
+        <div className="flex-1 flex flex-col items-center justify-center p-8">
+          <div className="w-8 h-8 border-4 border-[#C8A261] border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-[11px] font-black text-amber-900/60 mt-4 tracking-wider uppercase">Loading payments...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col min-h-full">

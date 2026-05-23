@@ -15,6 +15,7 @@ export interface Occupant {
   email: string;
   joinDate: string;
   status: 'Active' | 'Inactive';
+  seatId: string;
   attendanceRate: number;
   monthlyFee: number;
   emergencyContact?: string;

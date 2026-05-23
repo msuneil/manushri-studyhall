@@ -143,7 +143,7 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
     <ConfirmationContext.Provider value={{ confirm }}>
       {children}
       {options && (
-        <div className={`fixed inset-0 z-[160] flex ${type === 'sheet' ? 'items-end justify-center' : 'items-center justify-center p-6'}`}>
+        <div className={`fixed inset-0 z-160 flex ${type === 'sheet' ? 'items-end justify-center' : 'items-center justify-center p-6'}`}>
           {/* Backdrop */}
           <div 
             className={`absolute inset-0 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200 ${
@@ -157,7 +157,7 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
             className={`
               relative bg-white shadow-2xl transition-all duration-300
               ${type === 'sheet' 
-                ? 'w-full max-w-md rounded-t-[2rem] rounded-b-none p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-300' 
+                ? 'w-full max-w-md rounded-t-4xl rounded-b-none p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))] animate-in slide-in-from-bottom duration-300' 
                 : 'w-full max-w-sm rounded-[2.5rem] p-6 animate-in zoom-in-95 duration-200'}
             `}
           >
