@@ -17,12 +17,19 @@ import {
   Sparkles
 } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../features/auth/AuthContext';
 import { Avatar } from '../components/common/Avatar';
 import { BottomSheet } from '../components/common/BottomSheet';
+import { 
+  ensureTodayAttendanceSession, 
+  bulkMarkAttendance 
+} from '../services/attendanceService';
+import { useEffect } from 'react';
 
 export default function Attendance() {
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
+  const { hallId, user } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [filterStatus, setFilterStatus] = useState<'All' | 'Present' | 'Absent' | 'Unmarked'>('All');
@@ -31,10 +38,31 @@ export default function Attendance() {
 
   const { occupants, seats, attendanceSessions, saveAttendanceSession, loading } = useData();
 
-  // Filter active occupants only
+  // Filter active occupants with physical seats only
   const activeOccupants = useMemo(() => {
-    return occupants.filter(o => o.isActive && o.status === 'Active');
+    return occupants.filter(o => o.isActive && o.status === 'Active' && o.seatId && o.seatId !== 'N/A');
   }, [occupants]);
+
+  // Safe Daily Session Initialization Guard
+  useEffect(() => {
+    if (!loading && hallId && selectedDate) {
+      const initSession = async () => {
+        try {
+          const today = new Date().toISOString().split('T')[0];
+          if (selectedDate > today) return; // Guard future dates
+          await ensureTodayAttendanceSession(
+            hallId,
+            user?.uid || user?.id || hallId,
+            selectedDate,
+            activeOccupants
+          );
+        } catch (err) {
+          console.error("Failed to ensure today's session:", err);
+        }
+      };
+      initSession();
+    }
+  }, [selectedDate, hallId, loading]);
 
   // Load selected date session or fallback to draft
   const activeSession = useMemo(() => {
@@ -106,27 +134,22 @@ export default function Attendance() {
 
   // Rapid operational attendance marking (Present -> Unmarked, Absent -> Present)
   const handleMarkAttendance = async (id: string, state: 'present' | 'absent') => {
-    if (activeSession.status === 'submitted') {
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    if (session?.isSubmitted) {
       showToast("Attendance is locked. Tap 'Unlock Session' to modify.", "info");
       return;
     }
 
-    const session = attendanceSessions.find(s => s.date === selectedDate);
     const currentRecords = session?.records || {};
-    const updatedRecords = { ...currentRecords };
-
     const currentVal = activeSession.records[id];
-    
-    if (currentVal === state) {
-      delete updatedRecords[id];
-    } else {
-      updatedRecords[id] = {
-        occupantId: id,
-        status: state === 'present' ? 'Present' : 'Absent',
-        markedAt: new Date().toISOString(),
-        markedBy: 'operator'
-      };
-    }
+    const targetStatus = currentVal === state ? 'Unmarked' : (state === 'present' ? 'Present' : 'Absent');
+
+    const updatedRecords = bulkMarkAttendance(
+      currentRecords,
+      [id],
+      targetStatus,
+      user?.uid || user?.id || 'operator'
+    );
 
     try {
       await saveAttendanceSession(selectedDate, false, updatedRecords);
@@ -146,7 +169,13 @@ export default function Attendance() {
   const handleNextDay = () => {
     const current = new Date(selectedDate);
     current.setDate(current.getDate() + 1);
-    setSelectedDate(current.toISOString().split('T')[0]);
+    const dateStr = current.toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    if (dateStr > today) {
+      showToast("Cannot navigate to future dates.", "error");
+      return;
+    }
+    setSelectedDate(dateStr);
   };
 
   const handleResetToToday = () => {
@@ -159,7 +188,8 @@ export default function Attendance() {
   const handleBulkMarkAll = async (type: 'present' | 'absent') => {
     setIsBulkSheetOpen(false);
 
-    if (activeSession.status === 'submitted') {
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    if (session?.isSubmitted) {
       showToast("Cannot modify locked session!", "error");
       return;
     }
@@ -175,18 +205,16 @@ export default function Attendance() {
 
     if (!confirmed) return;
 
-    const session = attendanceSessions.find(s => s.date === selectedDate);
     const currentRecords = session?.records || {};
-    const updatedRecords = { ...currentRecords };
+    const occupantIds = enrichedOccupants.map(o => o.id);
+    const status = type === 'present' ? 'Present' : 'Absent';
 
-    enrichedOccupants.forEach(occ => {
-      updatedRecords[occ.id] = {
-        occupantId: occ.id,
-        status: type === 'present' ? 'Present' : 'Absent',
-        markedAt: new Date().toISOString(),
-        markedBy: 'operator'
-      };
-    });
+    const updatedRecords = bulkMarkAttendance(
+      currentRecords,
+      occupantIds,
+      status,
+      user?.uid || user?.id || 'operator'
+    );
 
     try {
       await saveAttendanceSession(selectedDate, false, updatedRecords);
@@ -200,7 +228,8 @@ export default function Attendance() {
   const handleBulkReset = async () => {
     setIsBulkSheetOpen(false);
 
-    if (activeSession.status === 'submitted') {
+    const session = attendanceSessions.find(s => s.date === selectedDate);
+    if (session?.isSubmitted) {
       showToast("Cannot reset locked session!", "error");
       return;
     }
@@ -226,19 +255,29 @@ export default function Attendance() {
 
   // Submission workflows
   const handleSubmitSession = async () => {
-    if (activeSession.status === 'submitted') return;
-
-    const confirmed = await confirm({
-      title: "Submit Daily Attendance?",
-      description: `Are you sure you want to submit today's active session for ${selectedDate}? This locks the record for audit integrity.`,
-      severity: "low",
-      confirmLabel: "Submit & Lock",
-      cancelLabel: "Cancel"
-    });
-
-    if (!confirmed) return;
-
     const session = attendanceSessions.find(s => s.date === selectedDate);
+    if (session?.isSubmitted) return;
+
+    if (stats.unmarked > 0) {
+      const confirmedInfo = await confirm({
+        title: "Incomplete Attendance!",
+        description: `There are still ${stats.unmarked} unmarked occupants for this date. Are you sure you want to submit and lock this session?`,
+        severity: "high",
+        confirmLabel: "Submit Anyway",
+        cancelLabel: "Cancel"
+      });
+      if (!confirmedInfo) return;
+    } else {
+      const confirmed = await confirm({
+        title: "Submit Daily Attendance?",
+        description: `Are you sure you want to submit today's active session for ${selectedDate}? This locks the record for audit integrity.`,
+        severity: "low",
+        confirmLabel: "Submit & Lock",
+        cancelLabel: "Cancel"
+      });
+      if (!confirmed) return;
+    }
+
     const records = session?.records || {};
 
     try {
@@ -359,7 +398,15 @@ export default function Attendance() {
               <input 
                 type="date" 
                 value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const today = new Date().toISOString().split('T')[0];
+                  if (val > today) {
+                    showToast("Cannot view or create future sessions.", "error");
+                    return;
+                  }
+                  setSelectedDate(val);
+                }}
                 className="bg-transparent text-white font-black text-base outline-none cursor-pointer focus:ring-1 focus:ring-indigo-500 rounded px-1"
               />
               {selectedDate !== new Date().toISOString().split('T')[0] && (
