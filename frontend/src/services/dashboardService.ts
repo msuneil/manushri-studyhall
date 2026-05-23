@@ -9,17 +9,131 @@ import type {
 } from '../types/models';
 import { IndianRupee, Armchair, Clock, CheckCircle2 } from 'lucide-react';
 
+export interface DashboardSnapshot {
+  expectedIncome: number;
+  collectedRevenue: number;
+  pendingDues: number;
+  estimatedNetProfit: number;
+  monthlyExpenses: number;
+  occupancy: {
+    totalSeats: number;
+    occupiedSeats: number;
+    availableSeats: number;
+    acRate: number;
+    nonAcRate: number;
+    acOccupied: number;
+    acTotal: number;
+    nonAcOccupied: number;
+    nonAcTotal: number;
+  };
+  defaulters: any[];
+}
+
+/**
+ * Centrally calculates the timezone-safe active billing month format e.g. "May 2026".
+ */
+export const getActiveBillingMonth = (): string => {
+  const date = new Date();
+  return date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+};
+
+/**
+ * Formats numbers into stylized Indian Currency representation.
+ */
+export const formatCurrency = (amount: number, compact = false): string => {
+  if (compact && amount >= 1000) {
+    if (amount >= 100000) {
+      return `₹${(amount / 100000).toFixed(1).replace(/\.0$/, '')}L`;
+    }
+    return `₹${(amount / 1000).toFixed(1).replace(/\.0$/, '')}K`;
+  }
+  return `₹${amount.toLocaleString('en-IN')}`;
+};
+
+/**
+ * Reusable helper to consistently detect if a payment is overdue.
+ */
+export const isPaymentOverdue = (payment: Payment, gracePeriodDays: number): boolean => {
+  if (payment.status === 'Overdue') return true;
+  if (payment.status !== 'Pending') return false;
+
+  const dueDate = new Date(payment.dueDate);
+  if (isNaN(dueDate.getTime())) return false;
+
+  const overdueThreshold = new Date(dueDate);
+  overdueThreshold.setDate(overdueThreshold.getDate() + gracePeriodDays);
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  overdueThreshold.setHours(0, 0, 0, 0);
+
+  return today > overdueThreshold;
+};
+
 export const dashboardService = {
+  /**
+   * Reusable currency formatting helper.
+   */
+  formatCurrency,
+
+  /**
+   * Reusable overdue checker helper.
+   */
+  isPaymentOverdue,
+
+  /**
+   * Reusable active billing month helper.
+   */
+  getActiveBillingMonth,
+
+  /**
+   * Atomic Calculation: Expected Income = sum(active occupants monthlyFee)
+   */
+  calculateExpectedIncome: (occupants: Occupant[]): number => {
+    return (occupants ?? [])
+      .filter(o => o.isActive && o.status === 'Active')
+      .reduce((sum, o) => sum + (o.monthlyFee ?? 0), 0);
+  },
+
+  /**
+   * Atomic Calculation: Collected Revenue = sum(paid payments in month)
+   */
+  calculateCollectedRevenue: (payments: Payment[], activeMonth: string): number => {
+    return (payments ?? [])
+      .filter(p => p.isActive && p.month === activeMonth && p.status === 'Paid')
+      .reduce((sum, p) => sum + p.amount, 0);
+  },
+
+  /**
+   * Atomic Calculation: Pending Dues = sum(pending/overdue payments in month)
+   */
+  calculatePendingDues: (payments: Payment[], activeMonth: string): number => {
+    return (payments ?? [])
+      .filter(p => p.isActive && p.month === activeMonth && (p.status === 'Pending' || p.status === 'Overdue'))
+      .reduce((sum, p) => sum + p.amount, 0);
+  },
+
+  /**
+   * Atomic Calculation: Estimated Net Profit = Collected Revenue - Monthly Expenses
+   */
+  calculateEstimatedNetProfit: (payments: Payment[], expenses: Expense[], activeMonth: string): number => {
+    const collected = dashboardService.calculateCollectedRevenue(payments, activeMonth);
+    const monthlyExpenses = (expenses ?? [])
+      .filter(e => e.month === activeMonth)
+      .reduce((sum, e) => sum + e.amount, 0);
+    return collected - monthlyExpenses;
+  },
+
   /**
    * Summarizes monthly financial aggregates based on active payments and monthly expenses.
    */
   calculateFinancialMetrics: (payments: Payment[], expenses: Expense[], activeMonth: string) => {
     const collectedRevenue = payments
-      .filter(p => p.month === activeMonth && p.status === 'Paid')
+      .filter(p => p.isActive && p.month === activeMonth && p.status === 'Paid')
       .reduce((sum, p) => sum + p.amount, 0);
 
     const pendingDues = payments
-      .filter(p => p.month === activeMonth && (p.status === 'Pending' || p.status === 'Overdue'))
+      .filter(p => p.isActive && p.month === activeMonth && (p.status === 'Pending' || p.status === 'Overdue'))
       .reduce((sum, p) => sum + p.amount, 0);
 
     const expectedIncome = collectedRevenue + pendingDues;
@@ -28,7 +142,7 @@ export const dashboardService = {
       .filter(e => e.month === activeMonth)
       .reduce((sum, e) => sum + e.amount, 0);
 
-    const estimatedProfit = expectedIncome - monthlyExpenses;
+    const estimatedProfit = collectedRevenue - monthlyExpenses;
 
     return {
       expectedIncome,
@@ -43,8 +157,11 @@ export const dashboardService = {
    * Sums seat utilization counts and AC vs Non-AC metrics.
    */
   calculateOccupancyMetrics: (seats: Seat[], rooms: Room[]) => {
-    const totalSeats = seats.length;
-    const occupiedSeats = seats.filter(s => s.isOccupied).length;
+    const safeSeats = seats ?? [];
+    const safeRooms = rooms ?? [];
+
+    const totalSeats = safeSeats.length;
+    const occupiedSeats = safeSeats.filter(s => s.isOccupied).length;
     const availableSeats = Math.max(0, totalSeats - occupiedSeats);
 
     let acTotal = 0;
@@ -52,8 +169,8 @@ export const dashboardService = {
     let nonAcTotal = 0;
     let nonAcOccupied = 0;
 
-    seats.forEach(s => {
-      const room = rooms.find(r => r.id === s.roomId);
+    safeSeats.forEach(s => {
+      const room = safeRooms.find(r => r.id === s.roomId);
       const isAC = room ? (room.type.toLowerCase().includes('ac') && !room.type.toLowerCase().includes('non-ac')) : true;
       if (isAC) {
         acTotal++;
@@ -81,14 +198,14 @@ export const dashboardService = {
   },
 
   /**
-   * Combines overdue payment records with occupant contact information for reminding dispatch.
+   * Combines overdue payment records with occupant contact information.
    */
   enrichDefaultersList: (payments: Payment[], occupants: Occupant[], seats: Seat[]) => {
-    return payments
-      .filter(p => p.status === 'Overdue')
+    return (payments ?? [])
+      .filter(p => p.isActive && p.status === 'Overdue')
       .map(p => {
-        const occupant = occupants.find(o => o.id === p.occupantId);
-        const seat = seats.find(s => s.id === occupant?.seatId);
+        const occupant = (occupants ?? []).find(o => o.id === p.occupantId);
+        const seat = (seats ?? []).find(s => s.id === occupant?.seatId);
         return {
           ...p,
           occupantName: occupant?.name || 'Unknown',
@@ -96,6 +213,76 @@ export const dashboardService = {
           phone: occupant?.phone || '',
         };
       });
+  },
+
+  /**
+   * Atomic Calculation: Combines overdue payment records with contact details.
+   */
+  deriveDefaultersList: (payments: Payment[], occupants: Occupant[], seats: Seat[]): any[] => {
+    return dashboardService.enrichDefaultersList(payments, occupants, seats);
+  },
+
+  /**
+   * Centrally compiles the entire Monthly Dashboard metrics into a single unified snapshot.
+   */
+  getMonthlyDashboardMetrics: (
+    payments: Payment[], 
+    expenses: Expense[], 
+    occupants: Occupant[], 
+    seats: Seat[], 
+    rooms: Room[],
+    settings: any,
+    activeMonth: string
+  ): DashboardSnapshot => {
+    const safePayments = payments ?? [];
+    const safeExpenses = expenses ?? [];
+    const safeOccupants = occupants ?? [];
+    const safeSeats = seats ?? [];
+    const safeRooms = rooms ?? [];
+
+    const gracePeriod = settings?.paymentSettings?.gracePeriodDays ?? 3;
+
+    // 1. Expected Income = sum(active occupants monthlyFee)
+    const expectedIncome = dashboardService.calculateExpectedIncome(safeOccupants);
+
+    // 2. Collected Revenue = sum(paid payments in month)
+    const collectedRevenue = dashboardService.calculateCollectedRevenue(safePayments, activeMonth);
+
+    // 3. Pending Dues = sum(pending/overdue payments in month)
+    const pendingDues = dashboardService.calculatePendingDues(safePayments, activeMonth);
+
+    // 4. Estimated Net Profit = Collected Revenue - Monthly Expenses
+    const monthlyExpenses = safeExpenses
+      .filter(e => e.month === activeMonth)
+      .reduce((sum, e) => sum + e.amount, 0);
+    const estimatedNetProfit = collectedRevenue - monthlyExpenses;
+
+    // 5. Occupancy metrics
+    const occupancy = dashboardService.calculateOccupancyMetrics(safeSeats, safeRooms);
+
+    // 6. Defaulters List mapped with overdue/passed grace period payments
+    const defaulters = safePayments
+      .filter(p => p.isActive && (p.status === 'Overdue' || isPaymentOverdue(p, gracePeriod)))
+      .map(p => {
+        const occupant = safeOccupants.find(o => o.id === p.occupantId);
+        const seat = safeSeats.find(s => s.id === occupant?.seatId);
+        return {
+          ...p,
+          occupantName: occupant?.name || 'Unknown',
+          seatNumber: seat?.number || 'N/A',
+          phone: occupant?.phone || '',
+        };
+      });
+
+    return {
+      expectedIncome,
+      collectedRevenue,
+      pendingDues,
+      estimatedNetProfit,
+      monthlyExpenses,
+      occupancy,
+      defaulters
+    };
   },
 
   /**
@@ -143,7 +330,7 @@ export const dashboardService = {
     });
 
     // 3. Pending tasks (Tasks Card)
-    const activeTasks = tasks.filter(t => !t.isCompleted);
+    const activeTasks = (tasks ?? []).filter(t => !t.isCompleted);
     if (activeTasks.length > 0) {
       const highestTask = activeTasks.find(t => t.priority === 'High') || activeTasks[0];
       queue.push({
@@ -160,14 +347,14 @@ export const dashboardService = {
       });
     }
 
-    // 4. Attendance incomplete (Attendance Card - LAST)
+    // 4. Attendance incomplete (Attendance Card)
     const todayDateStr = new Date().toISOString().split('T')[0];
-    const todaysSession = attendanceSessions.find(s => s.date === todayDateStr);
+    const todaysSession = (attendanceSessions ?? []).find(s => s.date === todayDateStr);
     const isAttendanceSubmitted = todaysSession ? todaysSession.isSubmitted : false;
 
     if (!isAttendanceSubmitted) {
       const markedCount = todaysSession ? Object.keys(todaysSession.records).length : 0;
-      const unmarkedCount = Math.max(0, occupants.filter(o => o.status === 'Active').length - markedCount);
+      const unmarkedCount = Math.max(0, (occupants ?? []).filter(o => o.isActive && o.status === 'Active').length - markedCount);
       
       queue.push({
         id: 'attendance',

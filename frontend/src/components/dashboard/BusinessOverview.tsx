@@ -1,6 +1,7 @@
 import React from 'react';
 import { MetricTile } from './MetricTile';
 import { SectionHeader } from './SectionHeader';
+import { formatCurrency } from '../../services/dashboardService';
 
 interface BusinessOverviewProps {
   expectedIncome: number;
@@ -36,7 +37,7 @@ export const BusinessOverview: React.FC<BusinessOverviewProps> = ({
         <div className="bg-[#FFFDFB] p-6 rounded-2xl border border-[#F4EFE6] shadow-[0_16px_40px_rgba(180,160,140,0.04),0_2px_8px_rgba(180,160,140,0.02)] flex flex-col justify-between space-y-4.5 transition-all duration-200 hover:border-[#EAE2D2] hover:shadow-[0_18px_48px_rgba(180,160,140,0.06)]">
           <div className="space-y-1">
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Expected Monthly Income</p>
-            <p className="text-3xl sm:text-4xl font-black text-slate-800 tracking-tight mt-1.5 leading-none">₹{expectedIncome.toLocaleString()}</p>
+            <p className="text-3xl sm:text-4xl font-black text-slate-800 tracking-tight mt-1.5 leading-none">{formatCurrency(expectedIncome)}</p>
             <p className="text-xs font-medium text-slate-400 leading-snug mt-1.5">Total projected seat cycle receivables</p>
           </div>
           <div className="pt-3 border-t border-[#FAF7EE] flex items-center justify-between text-[9px] font-bold text-slate-400 uppercase tracking-wider">
@@ -54,7 +55,7 @@ export const BusinessOverview: React.FC<BusinessOverviewProps> = ({
                 Healthy
               </span>
             </div>
-            <p className="text-3xl sm:text-4xl font-black text-emerald-800 tracking-tight mt-1.5 leading-none">₹{estimatedProfit.toLocaleString()}</p>
+            <p className="text-3xl sm:text-4xl font-black text-emerald-800 tracking-tight mt-1.5 leading-none">{formatCurrency(estimatedProfit)}</p>
             <p className="text-xs font-semibold text-emerald-700/85 leading-snug mt-1.5">Projected revenue minus operations overhead</p>
           </div>
           <div className="pt-3 border-t border-emerald-500/10 flex items-center justify-between text-[9px] font-bold text-emerald-700 uppercase tracking-wider">
@@ -68,7 +69,7 @@ export const BusinessOverview: React.FC<BusinessOverviewProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <MetricTile 
           label="Amount Collected" 
-          value={`₹${collectedRevenue.toLocaleString()}`}
+          value={formatCurrency(collectedRevenue)}
           subtitle="Cleared occupant cycle fees"
           progressBarPercent={collectionPercent}
           progressBarColor="bg-amber-600"
@@ -77,7 +78,7 @@ export const BusinessOverview: React.FC<BusinessOverviewProps> = ({
         
         <MetricTile 
           label="Pending Dues" 
-          value={`₹${pendingDues.toLocaleString()}`}
+          value={formatCurrency(pendingDues)}
           subtitle="Requires direct recovery follow-up"
           badge="Action Required"
           badgeColor="bg-rose-50 text-rose-700 border-rose-100/50"
@@ -86,7 +87,7 @@ export const BusinessOverview: React.FC<BusinessOverviewProps> = ({
         
         <MetricTile 
           label="Monthly Expenses" 
-          value={`₹${monthlyExpenses.toLocaleString()}`}
+          value={formatCurrency(monthlyExpenses)}
           subtitle="Fixed rent + utility operational costs"
           badge="Overhead"
           badgeColor="bg-slate-50 text-slate-600 border-slate-200/50"
