@@ -6,7 +6,8 @@ import {
   query, 
   where, 
   orderBy, 
-  onSnapshot
+  onSnapshot,
+  getDocs
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
 import type { Payment } from '../types/models';
@@ -63,6 +64,51 @@ export const paymentRepository = {
       archivedAt: now,
       ...updateMetadata(operatorId),
     });
+  },
+
+  getPaymentsByMonth: async (hallId: string, month: string): Promise<Payment[]> => {
+    const q = query(
+      collection(db, 'payments'),
+      where('hallId', '==', hallId),
+      where('month', '==', month),
+      where('isActive', '==', true)
+    );
+    const snap = await getDocs(q);
+    const payments: Payment[] = [];
+    snap.forEach((docSnap) => {
+      payments.push({ id: docSnap.id, ...docSnap.data() } as Payment);
+    });
+    return payments;
+  },
+
+  getPendingPayments: async (hallId: string): Promise<Payment[]> => {
+    const q = query(
+      collection(db, 'payments'),
+      where('hallId', '==', hallId),
+      where('status', '==', 'Pending'),
+      where('isActive', '==', true)
+    );
+    const snap = await getDocs(q);
+    const payments: Payment[] = [];
+    snap.forEach((docSnap) => {
+      payments.push({ id: docSnap.id, ...docSnap.data() } as Payment);
+    });
+    return payments;
+  },
+
+  getOverduePayments: async (hallId: string): Promise<Payment[]> => {
+    const q = query(
+      collection(db, 'payments'),
+      where('hallId', '==', hallId),
+      where('status', '==', 'Overdue'),
+      where('isActive', '==', true)
+    );
+    const snap = await getDocs(q);
+    const payments: Payment[] = [];
+    snap.forEach((docSnap) => {
+      payments.push({ id: docSnap.id, ...docSnap.data() } as Payment);
+    });
+    return payments;
   }
 };
 

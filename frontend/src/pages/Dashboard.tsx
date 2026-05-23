@@ -5,7 +5,7 @@ import { useToast } from '../components/Toast';
 import { useConfirmation } from '../components/Confirmation';
 import { useSettings } from '../features/settings/SettingsContext';
 import { useData } from '../contexts/DataContext';
-import { dashboardService } from '../services/dashboardService';
+import { dashboardService, getActiveBillingMonth } from '../services/dashboardService';
 
 // Import clean, modular, scalable subcomponents
 import { BusinessOverview } from '../components/dashboard/BusinessOverview';
@@ -37,34 +37,35 @@ export default function Dashboard() {
   // Local state to manage exiting task check animations
   const [completingTasks, setCompletingTasks] = useState<string[]>([]);
 
-  const activeMonth = 'May 2026';
+  // Dynamically retrieve the timezone-safe active billing month format (e.g., "May 2026")
+  const activeMonth = useMemo(() => {
+    return getActiveBillingMonth();
+  }, []);
 
-  // Reactively calculate financial metrics
-  const financialMetrics = useMemo(() => {
-    return dashboardService.calculateFinancialMetrics(payments, expenses, activeMonth);
-  }, [payments, expenses, activeMonth]);
+  // Compute a single cohesive monthly dashboard snapshot reactively
+  const dashboardSnapshot = useMemo(() => {
+    return dashboardService.getMonthlyDashboardMetrics(
+      payments,
+      expenses,
+      occupants,
+      seats,
+      rooms,
+      settings,
+      activeMonth
+    );
+  }, [payments, expenses, occupants, seats, rooms, settings, activeMonth]);
 
-  // Reactively calculate seat occupancy and utilization metrics
-  const occupancyMetrics = useMemo(() => {
-    return dashboardService.calculateOccupancyMetrics(seats, rooms);
-  }, [seats, rooms]);
-
-  // Reactively calculate the enriched active defaulters list
-  const enrichedOverduePayments = useMemo(() => {
-    return dashboardService.enrichDefaultersList(payments, occupants, seats);
-  }, [payments, occupants, seats]);
-
-  // Reactively calculate priority queue rankings
+  // Reactively calculate priority queue rankings from the snapshot
   const priorityQueue = useMemo(() => {
     return dashboardService.derivePriorityQueue(
-      enrichedOverduePayments.length,
-      financialMetrics.pendingDues,
-      occupancyMetrics,
+      dashboardSnapshot.defaulters.length,
+      dashboardSnapshot.pendingDues,
+      dashboardSnapshot.occupancy,
       tasks,
       attendanceSessions,
       occupants
     );
-  }, [enrichedOverduePayments, financialMetrics, occupancyMetrics, tasks, attendanceSessions, occupants]);
+  }, [dashboardSnapshot, tasks, attendanceSessions, occupants]);
 
   // Filter tasks to show active ones or those currently undergoing completion fade-out
   const activeTasks = useMemo(() => {
@@ -140,15 +141,15 @@ export default function Dashboard() {
         
         {/* 1. Occupancy & Seat Utilization */}
         <OccupancyOverview 
-          totalSeats={occupancyMetrics.totalSeats}
-          occupiedSeats={occupancyMetrics.occupiedSeats}
-          availableSeats={occupancyMetrics.availableSeats}
-          acRate={occupancyMetrics.acRate}
-          nonAcRate={occupancyMetrics.nonAcRate}
-          acOccupied={occupancyMetrics.acOccupied}
-          acTotal={occupancyMetrics.acTotal}
-          nonAcOccupied={occupancyMetrics.nonAcOccupied}
-          nonAcTotal={occupancyMetrics.nonAcTotal}
+          totalSeats={dashboardSnapshot.occupancy.totalSeats}
+          occupiedSeats={dashboardSnapshot.occupancy.occupiedSeats}
+          availableSeats={dashboardSnapshot.occupancy.availableSeats}
+          acRate={dashboardSnapshot.occupancy.acRate}
+          nonAcRate={dashboardSnapshot.occupancy.nonAcRate}
+          acOccupied={dashboardSnapshot.occupancy.acOccupied}
+          acTotal={dashboardSnapshot.occupancy.acTotal}
+          nonAcOccupied={dashboardSnapshot.occupancy.nonAcOccupied}
+          nonAcTotal={dashboardSnapshot.occupancy.nonAcTotal}
           onNavigateToSeats={() => navigate('/seats')}
         />
 
@@ -164,7 +165,7 @@ export default function Dashboard() {
 
         {/* 4. Actionable Defaulters List */}
         <DefaultersList 
-          defaulters={enrichedOverduePayments}
+          defaulters={dashboardSnapshot.defaulters}
           onSendReminder={handleSendReminder}
           onNavigateToPayments={() => navigate('/payments')}
         />
@@ -179,11 +180,11 @@ export default function Dashboard() {
 
         {/* 6. Monthly Business Snapshot */}
         <BusinessOverview 
-          expectedIncome={financialMetrics.expectedIncome}
-          collectedRevenue={financialMetrics.collectedRevenue}
-          pendingDues={financialMetrics.pendingDues}
-          monthlyExpenses={financialMetrics.monthlyExpenses}
-          estimatedProfit={financialMetrics.estimatedProfit}
+          expectedIncome={dashboardSnapshot.expectedIncome}
+          collectedRevenue={dashboardSnapshot.collectedRevenue}
+          pendingDues={dashboardSnapshot.pendingDues}
+          monthlyExpenses={dashboardSnapshot.monthlyExpenses}
+          estimatedProfit={dashboardSnapshot.estimatedNetProfit}
           onNavigateToPayments={() => navigate('/payments')}
         />
 
