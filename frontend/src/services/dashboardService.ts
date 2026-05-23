@@ -91,7 +91,7 @@ export const dashboardService = {
    */
   calculateExpectedIncome: (occupants: Occupant[]): number => {
     return (occupants ?? [])
-      .filter(o => o.isActive && o.status === 'Active')
+      .filter(o => o.isActive && o.status === 'Active' && o.seatId && o.seatId !== 'N/A')
       .reduce((sum, o) => sum + (o.monthlyFee ?? 0), 0);
   },
 

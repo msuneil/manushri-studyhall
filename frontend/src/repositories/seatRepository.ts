@@ -6,7 +6,8 @@ import {
   query, 
   where, 
   onSnapshot,
-  writeBatch
+  writeBatch,
+  getDocs
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
 import type { Seat } from '../types/models';
@@ -83,6 +84,62 @@ export const seatRepository = {
       archivedAt: now,
       ...updateMetadata(operatorId),
     });
+  },
+
+  assignSeat: async (seatId: string, occupantId: string, operatorId: string) => {
+    const seatRef = doc(db, 'seats', seatId);
+    await updateDoc(seatRef, {
+      isOccupied: true,
+      occupantId,
+      ...updateMetadata(operatorId),
+    });
+  },
+
+  vacateSeat: async (seatId: string, operatorId: string) => {
+    const seatRef = doc(db, 'seats', seatId);
+    await updateDoc(seatRef, {
+      isOccupied: false,
+      occupantId: '',
+      ...updateMetadata(operatorId),
+    });
+  },
+
+  updateSeatStatus: async (seatId: string, fields: Partial<Seat>, operatorId: string) => {
+    const seatRef = doc(db, 'seats', seatId);
+    await updateDoc(seatRef, {
+      ...fields,
+      ...updateMetadata(operatorId),
+    });
+  },
+
+  getAvailableSeats: async (hallId: string): Promise<Seat[]> => {
+    const q = query(
+      collection(db, 'seats'),
+      where('hallId', '==', hallId),
+      where('isOccupied', '==', false),
+      where('isActive', '==', true)
+    );
+    const snap = await getDocs(q);
+    const seats: Seat[] = [];
+    snap.forEach((docSnap) => {
+      seats.push({ id: docSnap.id, ...docSnap.data() } as Seat);
+    });
+    return seats;
+  },
+
+  getOccupiedSeats: async (hallId: string): Promise<Seat[]> => {
+    const q = query(
+      collection(db, 'seats'),
+      where('hallId', '==', hallId),
+      where('isOccupied', '==', true),
+      where('isActive', '==', true)
+    );
+    const snap = await getDocs(q);
+    const seats: Seat[] = [];
+    snap.forEach((docSnap) => {
+      seats.push({ id: docSnap.id, ...docSnap.data() } as Seat);
+    });
+    return seats;
   }
 };
 
