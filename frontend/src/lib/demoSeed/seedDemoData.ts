@@ -1,4 +1,4 @@
-import { collection, doc, writeBatch } from 'firebase/firestore';
+import { collection, doc, writeBatch, query, where, getDocs, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase/firestore';
 import { createMetadata, createSoftDelete } from '../../repositories/baseRepository';
 import { OccupantStatus, PaymentStatus, RoomType } from '../../types/models';
@@ -9,6 +9,18 @@ import { OccupantStatus, PaymentStatus, RoomType } from '../../types/models';
  * @param email The registered administrator's email
  */
 export const seedDemoData = async (hallId: string, _email: string) => {
+  // Pre-existence check: Do not seed if there are already active rooms
+  const roomsQuery = query(
+    collection(db, 'rooms'),
+    where('hallId', '==', hallId),
+    where('isActive', '==', true)
+  );
+  const roomsSnap = await getDocs(roomsQuery);
+  if (!roomsSnap.empty) {
+    console.log(`[seedDemoData] Hall ${hallId} already has active rooms. Skipping demo seeding to prevent duplication.`);
+    return;
+  }
+
   const batch = writeBatch(db);
   const now = new Date().toISOString();
   
@@ -333,5 +345,16 @@ export const seedDemoData = async (hallId: string, _email: string) => {
   });
 
   await batch.commit();
+
+  // Mark the settings as onboarded to prevent automated re-triggers
+  try {
+    const settingsRef = doc(db, 'settings', hallId);
+    await updateDoc(settingsRef, {
+      isOnboarded: true
+    });
+    console.log(`[seedDemoData] Onboarding marked as completed for hall: ${hallId}`);
+  } catch (error) {
+    console.error('Failed to update settings onboarding flag:', error);
+  }
 };
 export default seedDemoData;

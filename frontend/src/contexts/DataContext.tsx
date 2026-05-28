@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from '../features/auth/AuthContext';
 import { useToast } from '../components/Toast';
+import { useSettings } from '../features/settings/SettingsContext';
 
 import { roomRepository } from '../repositories/roomRepository';
 import { seatRepository } from '../repositories/seatRepository';
@@ -74,6 +75,7 @@ const DataContext = createContext<DataContextType | undefined>(undefined);
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { hallId, user } = useAuth();
   const { showToast } = useToast();
+  const { settings, loaded: settingsLoaded, updateSettings } = useSettings();
   
   const [rooms, setRooms] = useState<Room[]>([]);
   const [seats, setSeats] = useState<Seat[]>([]);
@@ -87,9 +89,28 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [isSeeding, setIsSeeding] = useState(false);
 
+  const subscribedHallIdRef = useRef<string | null>(null);
+  const unsubscribesRef = useRef<(() => void)[]>([]);
+  const hasTriggeredOnboardingRef = useRef<boolean>(false);
+
   // Synchronize realtime collection snapshots in single-instance connections
   useEffect(() => {
+    // 1. Explicit cleanup during auth logout, hallId change, or session invalidation
     if (!hallId) {
+      if (unsubscribesRef.current.length > 0) {
+        console.log(`[DataContext] Cleaning up ${unsubscribesRef.current.length} active Firestore listeners (auth/session transition)`);
+        unsubscribesRef.current.forEach((unsub) => {
+          try {
+            unsub();
+          } catch (e) {
+            console.error('Error executing unsubscribe handler:', e);
+          }
+        });
+        unsubscribesRef.current = [];
+      }
+      subscribedHallIdRef.current = null;
+      hasTriggeredOnboardingRef.current = false; // Reset session onboarding lock
+
       setRooms([]);
       setSeats([]);
       setOccupants([]);
@@ -102,18 +123,38 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
-    setLoading(true);
-    let activeSubsCount = 8;
+    // 2. Prevent duplicate/parallel subscription attachments
+    if (subscribedHallIdRef.current === hallId) {
+      console.log('[DataContext] Subscription already established for hall:', hallId, '- ignoring redundant call.');
+      return;
+    }
 
-    // Failsafe timeout to prevent app from getting stuck on loading spinner if any subscriber fails (e.g., due to missing indexes or rules)
+    // Ensure any previously lingering listeners are terminated first
+    if (unsubscribesRef.current.length > 0) {
+      console.log(`[DataContext] Terminating ${unsubscribesRef.current.length} lingering listeners before establishing new context`);
+      unsubscribesRef.current.forEach((unsub) => {
+        try {
+          unsub();
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      unsubscribesRef.current = [];
+    }
+
+    subscribedHallIdRef.current = hallId;
+    setLoading(true);
+
+    // Failsafe timeout to prevent app from getting stuck on loading spinner if any subscriber fails
     const failsafeTimeout = setTimeout(() => {
       console.warn("DataContext subscription failsafe triggered: forcing loading to false after 2.5s.");
       setLoading(false);
     }, 2500);
 
-    const checkLoaded = () => {
-      activeSubsCount--;
-      if (activeSubsCount <= 0) {
+    const loadedCollections = new Set<string>();
+    const checkLoaded = (collectionName: string) => {
+      loadedCollections.add(collectionName);
+      if (loadedCollections.size >= 8) {
         setLoading(false);
         clearTimeout(failsafeTimeout);
       }
@@ -122,69 +163,108 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Subscriptions setup
     const unsubRooms = roomRepository.subscribeRooms(hallId, (data) => {
       setRooms(data);
-      checkLoaded();
+      checkLoaded('rooms');
     });
 
     const unsubSeats = seatRepository.subscribeSeats(hallId, (data) => {
       setSeats(data);
-      checkLoaded();
+      checkLoaded('seats');
     });
 
     const unsubOccupants = occupantRepository.subscribeOccupants(hallId, (data) => {
       setOccupants(data);
-      checkLoaded();
+      checkLoaded('occupants');
     });
 
     const unsubPayments = paymentRepository.subscribePayments(hallId, (data) => {
       setPayments(data);
-      checkLoaded();
+      checkLoaded('payments');
     });
 
     const unsubAttendance = attendanceRepository.subscribeAttendanceSessions(hallId, (data) => {
       setAttendanceSessions(data);
-      checkLoaded();
+      checkLoaded('attendance');
     });
 
     const unsubTasks = taskRepository.subscribeTasks(hallId, (data) => {
       setTasks(data);
-      checkLoaded();
+      checkLoaded('tasks');
     });
 
     const unsubExpenses = expenseRepository.subscribeExpenses(hallId, (data) => {
       setExpenses(data);
-      checkLoaded();
+      checkLoaded('expenses');
     });
 
     const unsubNotifications = notificationRepository.subscribeNotifications(hallId, (data) => {
       setNotifications(data);
-      checkLoaded();
+      checkLoaded('notifications');
     });
 
+    unsubscribesRef.current = [
+      unsubRooms,
+      unsubSeats,
+      unsubOccupants,
+      unsubPayments,
+      unsubAttendance,
+      unsubTasks,
+      unsubExpenses,
+      unsubNotifications
+    ];
+
+    // 3. Provider unmount cleanup
     return () => {
+      console.log('[DataContext] Provider unmounted: cleaning up active Firestore listeners');
       clearTimeout(failsafeTimeout);
-      unsubRooms();
-      unsubSeats();
-      unsubOccupants();
-      unsubPayments();
-      unsubAttendance();
-      unsubTasks();
-      unsubExpenses();
-      unsubNotifications();
+      unsubscribesRef.current.forEach((unsub) => {
+        try {
+          unsub();
+        } catch (e) {
+          console.error(e);
+        }
+      });
+      unsubscribesRef.current = [];
+      subscribedHallIdRef.current = null;
     };
   }, [hallId]);
 
   // Automated onboarding seeding check
   useEffect(() => {
-    if (!loading && hallId && rooms.length === 0 && !isSeeding) {
+    if (!settingsLoaded || settings?.initialized === true || settings?.isInitializing === true || hasTriggeredOnboardingRef.current) {
+      return;
+    }
+
+    const isActuallyEmpty = rooms.length === 0 && seats.length === 0 && occupants.length === 0;
+    const isAlreadyOnboarded = settings?.isOnboarded === true || hasTriggeredOnboardingRef.current;
+
+    if (settingsLoaded && !loading && hallId && isActuallyEmpty && !isAlreadyOnboarded && !isSeeding) {
+      hasTriggeredOnboardingRef.current = true; // Set lock instantly
       const executeSeeding = async () => {
         setIsSeeding(true);
         setLoading(true);
         try {
-          showToast('Initializing study hall with default templates...', 'info');
+          // Set concurrency lock
+          await updateSettings('isInitializing', true);
+          
+          if (!settings?.initialized) {
+            showToast('Initializing study hall with default templates...', 'info');
+          }
+          
           await seedDemoData(hallId, user?.email || '');
+          
+          // Mark successful completion atomically/sequentially
+          await updateSettings('isOnboarded', true);
+          await updateSettings('initialized', true);
+          await updateSettings('seedVersion', 1);
+          await updateSettings('initializedAt', new Date().toISOString());
+          await updateSettings('isInitializing', false);
+          
           showToast('Study Hall successfully initialized with live demo metrics!', 'success');
         } catch (error) {
           console.error('Seeding error:', error);
+          // Safely release concurrency lock on failure
+          hasTriggeredOnboardingRef.current = false; // Reset lock on error
+          await updateSettings('isInitializing', false);
           showToast('Failed to seed onboarding demo data.', 'error');
         } finally {
           setLoading(false);
@@ -193,17 +273,24 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       };
       executeSeeding();
     }
-  }, [loading, rooms.length, hallId]);
+  }, [loading, settingsLoaded, rooms.length, seats.length, occupants.length, hallId, settings?.isOnboarded, settings?.initialized, settings?.isInitializing, isSeeding, updateSettings]);
 
   const triggerSeeding = async () => {
-    if (!hallId || isSeeding) return;
+    if (!hallId || isSeeding || settings?.isInitializing) return;
     setIsSeeding(true);
     setLoading(true);
     try {
+      await updateSettings('isInitializing', true);
       await seedDemoData(hallId, user?.email || '');
+      await updateSettings('isOnboarded', true);
+      await updateSettings('initialized', true);
+      await updateSettings('seedVersion', 1);
+      await updateSettings('initializedAt', new Date().toISOString());
+      await updateSettings('isInitializing', false);
       showToast('Demo data seeded successfully!', 'success');
     } catch (e) {
       console.error(e);
+      await updateSettings('isInitializing', false);
       showToast('Failed to seed demo data.', 'error');
     } finally {
       setLoading(false);

@@ -4,7 +4,6 @@ import {
   setDoc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
@@ -15,15 +14,18 @@ export const expenseRepository = {
   subscribeExpenses: (hallId: string, callback: (expenses: Expense[]) => void) => {
     const q = query(
       collection(db, 'expenses'),
-      where('hallId', '==', hallId),
-      orderBy('createdAt', 'desc')
+      where('hallId', '==', hallId)
     );
     return onSnapshot(q, (snapshot) => {
       const expenses: Expense[] = [];
       snapshot.forEach((docSnap) => {
         expenses.push({ id: docSnap.id, ...docSnap.data() } as Expense);
       });
+      expenses.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(expenses);
+    }, (error) => {
+      console.error("subscribeExpenses error:", error);
+      callback([]);
     });
   },
 

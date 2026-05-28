@@ -1,5 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../features/auth/AuthContext';
+import { runProductionCleanup } from '../services/cleanupService';
 import { Header } from '../components/Header';
 import { useToast } from '../components/Toast';
 import { useConfirmation } from '../components/Confirmation';
@@ -21,6 +23,14 @@ export default function Dashboard() {
   const { showToast } = useToast();
   const { confirm } = useConfirmation();
   const { settings } = useSettings();
+  const { hallId } = useAuth();
+  
+  // Silently trigger background production cleanup migration pass to remove duplicate demo records
+  useEffect(() => {
+    if (hallId) {
+      runProductionCleanup(hallId);
+    }
+  }, [hallId]);
   
   // Connect to the lightweight live orchestrator context
   const {
