@@ -6,7 +6,6 @@ import {
   query, 
   collection,
   where, 
-  orderBy, 
   onSnapshot,
   getDocs
 } from 'firebase/firestore';
@@ -19,15 +18,18 @@ export const attendanceRepository = {
     const q = query(
       collection(db, 'attendanceSessions'),
       where('hallId', '==', hallId),
-      where('isActive', '==', true),
-      orderBy('date', 'desc')
+      where('isActive', '==', true)
     );
     return onSnapshot(q, (snapshot) => {
       const sessions: AttendanceSession[] = [];
       snapshot.forEach((docSnap) => {
         sessions.push({ id: docSnap.id, ...docSnap.data() } as AttendanceSession);
       });
+      sessions.sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime());
       callback(sessions);
+    }, (error) => {
+      console.error("subscribeAttendanceSessions error:", error);
+      callback([]);
     });
   },
 

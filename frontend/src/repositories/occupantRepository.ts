@@ -19,15 +19,18 @@ export const occupantRepository = {
     const q = query(
       collection(db, 'occupants'),
       where('hallId', '==', hallId),
-      where('isActive', '==', true),
-      orderBy('createdAt', 'desc')
+      where('isActive', '==', true)
     );
     return onSnapshot(q, (snapshot) => {
       const occupants: Occupant[] = [];
       snapshot.forEach((docSnap) => {
         occupants.push({ id: docSnap.id, ...docSnap.data() } as Occupant);
       });
+      occupants.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(occupants);
+    }, (error) => {
+      console.error("subscribeOccupants error:", error);
+      callback([]);
     });
   },
 

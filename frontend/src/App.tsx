@@ -7,6 +7,13 @@ import { ConfirmationProvider } from './components/Confirmation';
 import { SettingsProvider } from './features/settings/SettingsContext';
 import { AuthProvider } from './features/auth/AuthContext';
 import { DataProvider } from './contexts/DataContext';
+import { devResetFirestore } from './utils/devResetUtility';
+
+// Expose secure global function restricted strictly to local development context
+if (import.meta.env.DEV) {
+  (window as any).__devResetFirestore = devResetFirestore;
+  console.log('[Developer Utility] window.__devResetFirestore(hallId) registered successfully. Use this command in the developer console to safely hard-reset Firestore collections and trigger a clean onboarding flow.');
+}
 
 // Lazy loading pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -34,8 +41,8 @@ export default function App() {
   return (
     <ToastProvider>
       <AuthProvider>
-        <DataProvider>
-          <SettingsProvider>
+        <SettingsProvider>
+          <DataProvider>
             <ConfirmationProvider>
               <BrowserRouter>
                 <Suspense fallback={<Loading />}>
@@ -64,8 +71,8 @@ export default function App() {
                 </Suspense>
               </BrowserRouter>
             </ConfirmationProvider>
-          </SettingsProvider>
-        </DataProvider>
+          </DataProvider>
+        </SettingsProvider>
       </AuthProvider>
     </ToastProvider>
   );

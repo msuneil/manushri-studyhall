@@ -5,7 +5,6 @@ import {
   updateDoc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
@@ -17,15 +16,18 @@ export const taskRepository = {
     const q = query(
       collection(db, 'tasks'),
       where('hallId', '==', hallId),
-      where('isActive', '==', true),
-      orderBy('createdAt', 'desc')
+      where('isActive', '==', true)
     );
     return onSnapshot(q, (snapshot) => {
       const tasks: Task[] = [];
       snapshot.forEach((docSnap) => {
         tasks.push({ id: docSnap.id, ...docSnap.data() } as Task);
       });
+      tasks.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(tasks);
+    }, (error) => {
+      console.error("subscribeTasks error:", error);
+      callback([]);
     });
   },
 

@@ -5,7 +5,6 @@ import {
   updateDoc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
@@ -17,15 +16,18 @@ export const roomRepository = {
     const q = query(
       collection(db, 'rooms'),
       where('hallId', '==', hallId),
-      where('isActive', '==', true),
-      orderBy('createdAt', 'desc')
+      where('isActive', '==', true)
     );
     return onSnapshot(q, (snapshot) => {
       const rooms: Room[] = [];
       snapshot.forEach((docSnap) => {
         rooms.push({ id: docSnap.id, ...docSnap.data() } as Room);
       });
+      rooms.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(rooms);
+    }, (error) => {
+      console.error("subscribeRooms error:", error);
+      callback([]);
     });
   },
 

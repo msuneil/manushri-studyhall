@@ -5,7 +5,6 @@ import {
   updateDoc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot,
   getDocs
 } from 'firebase/firestore';
@@ -18,15 +17,18 @@ export const paymentRepository = {
     const q = query(
       collection(db, 'payments'),
       where('hallId', '==', hallId),
-      where('isActive', '==', true),
-      orderBy('createdAt', 'desc')
+      where('isActive', '==', true)
     );
     return onSnapshot(q, (snapshot) => {
       const payments: Payment[] = [];
       snapshot.forEach((docSnap) => {
         payments.push({ id: docSnap.id, ...docSnap.data() } as Payment);
       });
+      payments.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(payments);
+    }, (error) => {
+      console.error("subscribePayments error:", error);
+      callback([]);
     });
   },
 

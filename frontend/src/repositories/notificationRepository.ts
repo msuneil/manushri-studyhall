@@ -5,7 +5,6 @@ import {
   updateDoc, 
   query, 
   where, 
-  orderBy, 
   onSnapshot
 } from 'firebase/firestore';
 import { db } from '../lib/firebase/firestore';
@@ -16,15 +15,18 @@ export const notificationRepository = {
   subscribeNotifications: (hallId: string, callback: (notifs: AppNotification[]) => void) => {
     const q = query(
       collection(db, 'notifications'),
-      where('hallId', '==', hallId),
-      orderBy('createdAt', 'desc')
+      where('hallId', '==', hallId)
     );
     return onSnapshot(q, (snapshot) => {
       const notifs: AppNotification[] = [];
       snapshot.forEach((docSnap) => {
         notifs.push({ id: docSnap.id, ...docSnap.data() } as AppNotification);
       });
+      notifs.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       callback(notifs);
+    }, (error) => {
+      console.error("subscribeNotifications error:", error);
+      callback([]);
     });
   },
 

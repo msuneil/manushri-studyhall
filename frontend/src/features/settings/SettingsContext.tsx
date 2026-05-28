@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 import { db } from '../../lib/firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
@@ -48,6 +48,11 @@ export interface AppSettings {
   paymentSettings: PaymentSettings;
   attendanceSettings: AttendanceSettings;
   roomDefaults: RoomDefaultSettings;
+  isOnboarded?: boolean;
+  initialized?: boolean;
+  initializedAt?: string;
+  seedVersion?: number;
+  isInitializing?: boolean;
 }
 
 export const defaultSettings: AppSettings = {
@@ -91,12 +96,20 @@ export const defaultSettings: AppSettings = {
     defaultAmenities: 'WiFi, Power Backup, RO Water',
     commonRules: "1. No noise in the hall.\n2. Maintain cleanliness.\n3. Mobile on silent mode.",
     autoOccupancy: true
-  }
+  },
+  isOnboarded: false,
+  initialized: false,
+  isInitializing: false,
+  seedVersion: 0
 };
 
 interface SettingsContextType {
   settings: AppSettings;
-  updateSettings: <K extends keyof AppSettings>(section: K, values: Partial<AppSettings[K]>) => Promise<void>;
+  loaded: boolean;
+  updateSettings: <K extends keyof AppSettings>(
+    section: K,
+    values: AppSettings[K] extends object ? Partial<AppSettings[K]> : AppSettings[K]
+  ) => Promise<void>;
   resetToDefaults: () => Promise<void>;
 }
 
@@ -115,7 +128,12 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ownerDetails: { ...defaultSettings.ownerDetails, ...parsed.ownerDetails },
           paymentSettings: { ...defaultSettings.paymentSettings, ...parsed.paymentSettings },
           attendanceSettings: { ...defaultSettings.attendanceSettings, ...parsed.attendanceSettings },
-          roomDefaults: { ...defaultSettings.roomDefaults, ...parsed.roomDefaults }
+          roomDefaults: { ...defaultSettings.roomDefaults, ...parsed.roomDefaults },
+          isOnboarded: parsed.isOnboarded ?? false,
+          initialized: parsed.initialized ?? false,
+          isInitializing: parsed.isInitializing ?? false,
+          initializedAt: parsed.initializedAt,
+          seedVersion: parsed.seedVersion ?? 0
         };
       } catch (e) {
         return defaultSettings;
@@ -124,15 +142,42 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return defaultSettings;
   });
 
+  const [loaded, setLoaded] = useState(false);
+
+  const subscribedHallIdRef = useRef<string | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
+
   // Listen to live database changes in settings scoped by hallId
   useEffect(() => {
+    // 1. Full cleanup under auth logout / hallId change / session invalidation
     if (!hallId) {
+      if (unsubscribeRef.current) {
+        console.log('[SettingsProvider] Cleaning up settings subscription (auth/session teardown)');
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+      subscribedHallIdRef.current = null;
       setSettings(defaultSettings);
+      setLoaded(false);
       return;
     }
 
+    // 2. Prevent duplicate/redundant subscriptions
+    if (subscribedHallIdRef.current === hallId) {
+      return;
+    }
+
+    // Clean up any stale subscription before registering new one
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+      unsubscribeRef.current = null;
+    }
+
+    subscribedHallIdRef.current = hallId;
+
     const docRef = doc(db, 'settings', hallId);
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      setLoaded(true);
       if (docSnap.exists()) {
         const data = docSnap.data() as Partial<AppSettings>;
         setSettings({
@@ -140,17 +185,32 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           ownerDetails: { ...defaultSettings.ownerDetails, ...data.ownerDetails },
           paymentSettings: { ...defaultSettings.paymentSettings, ...data.paymentSettings },
           attendanceSettings: { ...defaultSettings.attendanceSettings, ...data.attendanceSettings },
-          roomDefaults: { ...defaultSettings.roomDefaults, ...data.roomDefaults }
+          roomDefaults: { ...defaultSettings.roomDefaults, ...data.roomDefaults },
+          isOnboarded: data.isOnboarded ?? false,
+          initialized: data.initialized ?? false,
+          isInitializing: data.isInitializing ?? false,
+          initializedAt: data.initializedAt,
+          seedVersion: data.seedVersion ?? 0
         });
       } else {
-        // Initialize defaults in firestore if not exists
-        setDoc(docRef, { ...defaultSettings, hallId });
+        // Fallback to defaultSettings locally, DO NOT mutate or automatically create settings document in Firestore.
+        setSettings(defaultSettings);
       }
     }, (error) => {
       console.error('Settings listening error:', error);
     });
 
-    return () => unsubscribe();
+    unsubscribeRef.current = unsubscribe;
+
+    // 3. Provider unmount cleanup
+    return () => {
+      if (unsubscribeRef.current) {
+        console.log('[SettingsProvider] Provider unmounted: cleaning up active listeners');
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+      subscribedHallIdRef.current = null;
+    };
   }, [hallId]);
 
   // Sync to localStorage as backup
@@ -160,26 +220,28 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const updateSettings = async <K extends keyof AppSettings>(
     section: K,
-    values: Partial<AppSettings[K]>
+    values: AppSettings[K] extends object ? Partial<AppSettings[K]> : AppSettings[K]
   ) => {
     // 1. Optimistic UI update locally
-    setSettings(prev => ({
-      ...prev,
-      [section]: {
-        ...prev[section],
-        ...values
-      }
-    }));
+    setSettings(prev => {
+      const isObj = prev[section] !== null && typeof prev[section] === 'object';
+      return {
+        ...prev,
+        [section]: isObj 
+          ? { ...(prev[section] as object), ...(values as object) } 
+          : values
+      };
+    });
 
     // 2. Persist to Firestore if user is authenticated
     if (hallId) {
       try {
         const docRef = doc(db, 'settings', hallId);
+        const isObj = settings[section] !== null && typeof settings[section] === 'object';
         await updateDoc(docRef, {
-          [`${section}`]: {
-            ...settings[section],
-            ...values
-          }
+          [`${section}`]: isObj
+            ? { ...(settings[section] as object), ...(values as object) }
+            : values
         });
       } catch (error) {
         console.error('Firestore settings update error:', error);
@@ -203,7 +265,7 @@ export const SettingsProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   return (
-    <SettingsContext.Provider value={{ settings, updateSettings, resetToDefaults }}>
+    <SettingsContext.Provider value={{ settings, loaded, updateSettings, resetToDefaults }}>
       {children}
     </SettingsContext.Provider>
   );
